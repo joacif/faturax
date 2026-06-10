@@ -128,6 +128,7 @@ export default function App() {
   const [installmentFriends, setInstallmentFriends] = useState<InstallmentFriend[]>([]);
   const [loadingData, setLoadingData] = useState(false);
   const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
+  const [sessionLoaded, setSessionLoaded] = useState(false);
 
   // Navegação
   const [activeTab, setActiveTab] = useState<'home' | 'cards' | 'friends' | 'purchases' | 'reports'>('home');
@@ -192,6 +193,9 @@ export default function App() {
           setSession({ user: { id: session.user.id, email: session.user.email || '' } });
           setIsGuest(false);
         }
+        setSessionLoaded(true);
+      }).catch(() => {
+        setSessionLoaded(true);
       });
 
       // Escuta mudanças
@@ -202,9 +206,12 @@ export default function App() {
         } else {
           setSession(null);
         }
+        setSessionLoaded(true);
       });
 
       return () => subscription.unsubscribe();
+    } else {
+      setSessionLoaded(true);
     }
   }, []);
 
@@ -419,9 +426,20 @@ export default function App() {
     } else {
       // Online
       try {
-        const { data, error } = await supabase
+        const { data: { user }, error: userError } = await supabase!.auth.getUser();
+        if (userError || !user) {
+          triggerNotification('Não foi possível verificar o utilizador. Faça login novamente.', 'error');
+          return;
+        }
+
+        const newCardDataWithUser = {
+          ...newCardData,
+          user_id: user.id
+        };
+
+        const { data, error } = await supabase!
           .from('cards')
-          .insert([newCardData])
+          .insert([newCardDataWithUser])
           .select();
         if (error) throw error;
         if (data) setCards([...cards, data[0]]);
@@ -495,9 +513,15 @@ export default function App() {
     } else {
       // Online
       try {
-        const { data, error } = await supabase
+        const { data: { user }, error: userError } = await supabase!.auth.getUser();
+        if (userError || !user) {
+          triggerNotification('Não foi possível verificar o utilizador. Faça login novamente.', 'error');
+          return;
+        }
+
+        const { data, error } = await supabase!
           .from('friends')
-          .insert([{ name: friendName }])
+          .insert([{ name: friendName, user_id: user.id }])
           .select();
         if (error) throw error;
         if (data) setFriends([...friends, data[0]]);
@@ -649,8 +673,14 @@ export default function App() {
     } else {
       // ONLINE SUPABASE
       try {
-        // 1. Cadastra a Compra
-        const { data: pData, error: pError } = await supabase
+        const { data: { user }, error: userError } = await supabase!.auth.getUser();
+        if (userError || !user) {
+          triggerNotification('Não foi possível verificar o utilizador. Faça login novamente.', 'error');
+          return;
+        }
+
+        // 1. Cadastra a Compra com user_id explicitamente
+        const { data: pData, error: pError } = await supabase!
           .from('purchases')
           .insert([{
             card_id: purchaseCard,
@@ -658,7 +688,8 @@ export default function App() {
             total_amount: amount,
             installments_count: instCount,
             purchase_date: purchaseDate,
-            category: purchaseCategory
+            category: purchaseCategory,
+            user_id: user.id
           }])
           .select();
         
@@ -1061,6 +1092,18 @@ export default function App() {
 
 
   // RENDERIZAÇÃO DE TELAS
+
+  // 0. CARREGAMENTO INICIAL DA SESSÃO
+  if (!sessionLoaded) {
+    return (
+      <div className="min-h-screen bg-background flex flex-col items-center justify-center p-4">
+        <div className="flex flex-col items-center">
+          <div className="w-10 h-10 border-4 border-accent/20 border-t-accent rounded-full animate-spin mb-4"></div>
+          <p className="text-textMuted text-xs font-semibold uppercase tracking-wider">A carregar aplicação...</p>
+        </div>
+      </div>
+    );
+  }
 
   // 1. TELA DE AUTENTICAÇÃO
   if (!session && !isGuest) {
