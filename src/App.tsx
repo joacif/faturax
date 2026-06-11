@@ -291,7 +291,11 @@ export default function App() {
           console.warn('Erro ao carregar cartões (banco pode estar vazio):', cardsErr.message);
           setCards([]);
         } else {
-          setCards(cardsData || []);
+          const mappedCards = cardsData || [];
+          setCards(mappedCards);
+          if (mappedCards.length > 0) {
+            setPurchaseCard(mappedCards[0].id);
+          }
         }
 
         // Carrega Amigos
@@ -353,10 +357,7 @@ export default function App() {
         setInstallments(installmentsData);
         setInstallmentFriends(instFriendsData);
 
-        // Atualiza formulários se tiver cartões cadastrados
-        if (cardsData && cardsData.length > 0 && !purchaseCard) {
-          setPurchaseCard(cardsData[0].id);
-        }
+
       } catch (err: any) {
         console.error('Erro crítico de conexão com o Supabase:', err.message);
         triggerNotification('Erro crítico de conexão com o Supabase. Utilizando modo local.', 'error');
@@ -367,10 +368,15 @@ export default function App() {
     }
   };
 
-  // Define cartão padrão no formulário ao carregar cartões
+  // Define cartão padrão no formulário ao carregar cartões de forma segura e dinâmica
   useEffect(() => {
-    if (cards.length > 0 && !purchaseCard) {
-      setPurchaseCard(cards[0].id);
+    if (cards.length > 0) {
+      const exists = cards.some(c => c.id === purchaseCard);
+      if (!exists) {
+        setPurchaseCard(cards[0].id);
+      }
+    } else {
+      setPurchaseCard('');
     }
   }, [cards, purchaseCard]);
 
