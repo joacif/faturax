@@ -222,6 +222,77 @@ export default function App() {
     }
   }, [session, isGuest]);
 
+  // Sincroniza dados locais (gerados como guest) com o Supabase após login
+  const syncLocalDataWithSupabase = async (loggedInUserId: string) => {
+    try {
+      // 1. Lê os dados locais do guest
+      const localCardsStr = localStorage.getItem(`fx_cards_guest`);
+      const localFriendsStr = localStorage.getItem(`fx_friends_guest`);
+      const localPurchasesStr = localStorage.getItem(`fx_purchases_guest`);
+
+      const localCards: CreditCard[] = localCardsStr ? JSON.parse(localCardsStr) : [];
+      const localFriends: Friend[] = localFriendsStr ? JSON.parse(localFriendsStr) : [];
+      const localPurchases: Purchase[] = localPurchasesStr ? JSON.parse(localPurchasesStr) : [];
+
+      // Filtra cartões que não sejam os mocks padrão originais para evitar duplicá-los no banco
+      const userAddedCards = localCards.filter(c => c.id !== 'c1' && c.id !== 'c2');
+      const userAddedFriends = localFriends.filter(f => f.id !== 'f1' && f.id !== 'f2' && f.id !== 'f3');
+      const userAddedPurchases = localPurchases.filter(p => p.id !== 'p1' && p.id !== 'p2');
+
+      console.log('Sincronizando dados locais para o Supabase... ', userAddedCards);
+
+      // Regra 1: Se o array de dados locais personalizados estiver vazio, ignora e segue em frente
+      if (userAddedCards.length === 0 && userAddedFriends.length === 0 && userAddedPurchases.length === 0) {
+        console.log('Nenhum dado local personalizado para sincronizar. Banco limpo.');
+        return;
+      }
+
+      // Se houver dados locais personalizados, realiza a sincronização:
+      // 1. Insere os cartões
+      if (userAddedCards.length > 0) {
+        const cardsToInsert = userAddedCards.map(c => ({
+          name: c.name,
+          limit: c.limit,
+          due_day: c.due_day,
+          closing_day: c.closing_day,
+          color: c.color,
+          user_id: loggedInUserId
+        }));
+
+        const { error: cardsErr } = await supabase!
+          .from('cards')
+          .insert(cardsToInsert);
+        if (cardsErr) throw cardsErr;
+      }
+
+      // 2. Insere amigos
+      if (userAddedFriends.length > 0) {
+        const friendsToInsert = userAddedFriends.map(f => ({
+          name: f.name,
+          user_id: loggedInUserId
+        }));
+
+        const { error: friendsErr } = await supabase!
+          .from('friends')
+          .insert(friendsToInsert);
+        if (friendsErr) throw friendsErr;
+      }
+
+      // Limpa os dados do guest após sincronização bem-sucedida para evitar dupla sincronização
+      localStorage.removeItem(`fx_cards_guest`);
+      localStorage.removeItem(`fx_friends_guest`);
+      localStorage.removeItem(`fx_purchases_guest`);
+      localStorage.removeItem(`fx_installments_guest`);
+      localStorage.removeItem(`fx_inst_friends_guest`);
+      
+      triggerNotification('Dados locais sincronizados com o Supabase!');
+    } catch (err: any) {
+      console.error('Erro de rede ou banco de dados durante a sincronização:', err.message);
+      // Regra 3: Bloco catch só deve ser ativado por erro de rede/banco de dados real do Supabase
+      throw new Error('Falha na comunicação com o Supabase: ' + err.message);
+    }
+  };
+
   // Função para carregar todos os dados (Supabase ou LocalStorage)
   const loadAllData = async () => {
     setLoadingData(true);
@@ -262,6 +333,9 @@ export default function App() {
     } else {
       // Modo Supabase
       try {
+        // Sincroniza dados do modo Convidado (guest) com o Supabase antes do carregamento
+        await syncLocalDataWithSupabase(userId);
+
         // Carrega Cartões
         const { data: cardsData, error: cardsErr } = await supabase
           .from('cards')
