@@ -225,68 +225,16 @@ export default function App() {
   // Sincroniza dados locais (gerados como guest) com o Supabase após login
   const syncLocalDataWithSupabase = async (loggedInUserId: string) => {
     try {
-      // 1. Lê os dados locais do guest
-      const localCardsStr = localStorage.getItem(`fx_cards_guest`);
-      const localFriendsStr = localStorage.getItem(`fx_friends_guest`);
-
-      const localCards: CreditCard[] = localCardsStr ? JSON.parse(localCardsStr) : [];
-      const localFriends: Friend[] = localFriendsStr ? JSON.parse(localFriendsStr) : [];
-
-      // Filtra cartões que não sejam os mocks padrão originais para evitar duplicá-los no banco
-      const userAddedCards = localCards.filter(c => c.id !== 'c1' && c.id !== 'c2');
-      const userAddedFriends = localFriends.filter(f => f.id !== 'f1' && f.id !== 'f2' && f.id !== 'f3');
-
-      console.log('Sincronizando dados locais para o Supabase... ', userAddedCards);
-
-      // Se não há cartões locais personalizados criados, assume que não há nada a sincronizar e retorna de imediato
-      if (userAddedCards.length === 0) {
-        console.log('Nenhum cartão local personalizado para sincronizar. Banco limpo.');
-        return;
-      }
-
-      // Se houver dados locais personalizados, realiza a sincronização:
-      // 1. Insere os cartões
-      if (userAddedCards.length > 0) {
-        const cardsToInsert = userAddedCards.map(c => ({
-          name: c.name,
-          limit: c.limit,
-          due_day: c.due_day,
-          closing_day: c.closing_day,
-          color: c.color,
-          user_id: loggedInUserId
-        }));
-
-        const { error: cardsErr } = await supabase!
-          .from('cards')
-          .insert(cardsToInsert);
-        if (cardsErr) throw cardsErr;
-      }
-
-      // 2. Insere amigos
-      if (userAddedFriends.length > 0) {
-        const friendsToInsert = userAddedFriends.map(f => ({
-          name: f.name,
-          user_id: loggedInUserId
-        }));
-
-        const { error: friendsErr } = await supabase!
-          .from('friends')
-          .insert(friendsToInsert);
-        if (friendsErr) throw friendsErr;
-      }
-
-      // Limpa os dados do guest após sincronização bem-sucedida para evitar dupla sincronização
+      // Regra 1: Desativa a sincronização automática de dados locais do guest para o Supabase
+      // Limpa os dados do guest locais para iniciar o banco online limpo do zero
       localStorage.removeItem(`fx_cards_guest`);
       localStorage.removeItem(`fx_friends_guest`);
       localStorage.removeItem(`fx_purchases_guest`);
       localStorage.removeItem(`fx_installments_guest`);
       localStorage.removeItem(`fx_inst_friends_guest`);
-      
-      triggerNotification('Dados locais sincronizados com o Supabase!');
+      console.log('Dados locais do guest limpos. Inicializando banco online do zero para o usuário:', loggedInUserId);
     } catch (err: any) {
-      console.error('Erro de rede ou banco de dados durante a sincronização:', err.message);
-      // Regra 3: Bloco catch só deve ser ativado por erro de rede/banco de dados real do Supabase
-      throw new Error('Falha na comunicação com o Supabase: ' + err.message);
+      console.warn('Erro ao limpar dados locais do guest:', err.message);
     }
   };
 
@@ -330,7 +278,7 @@ export default function App() {
     } else {
       // Modo Supabase
       try {
-        // Sincroniza dados do modo Convidado (guest) com o Supabase antes do carregamento
+        // Limpa apenas dados locais do guest se existirem
         await syncLocalDataWithSupabase(userId);
 
         // Carrega Cartões selecionando as colunas explicitamente, com "limit" entre aspas duplas por ser palavra reservada
@@ -338,51 +286,70 @@ export default function App() {
           .from('cards')
           .select('id, user_id, name, "limit", due_day, closing_day, color')
           .order('name');
-        if (cardsErr) throw cardsErr;
+        
+        if (cardsErr) {
+          console.warn('Erro ao carregar cartões (banco pode estar vazio):', cardsErr.message);
+          setCards([]);
+        } else {
+          setCards(cardsData || []);
+        }
 
         // Carrega Amigos
         const { data: friendsData, error: friendsErr } = await supabase
           .from('friends')
           .select('*')
           .order('name');
-        if (friendsErr) throw friendsErr;
+        
+        if (friendsErr) {
+          console.warn('Erro ao carregar amigos:', friendsErr.message);
+          setFriends([]);
+        } else {
+          setFriends(friendsData || []);
+        }
 
         // Carrega Compras
         const { data: purchasesData, error: purchasesErr } = await supabase
           .from('purchases')
           .select('*')
           .order('purchase_date', { ascending: false });
-        if (purchasesErr) throw purchasesErr;
-
-        // Carrega Parcelas (Busca parcelas das compras do usuário)
+        
         let installmentsData: Installment[] = [];
         let instFriendsData: InstallmentFriend[] = [];
 
-        if (purchasesData && purchasesData.length > 0) {
-          const purchaseIds = purchasesData.map(p => p.id);
-          
-          const { data: instData, error: instErr } = await supabase
-            .from('installments')
-            .select('*')
-            .in('purchase_id', purchaseIds)
-            .order('due_date');
-          if (instErr) throw instErr;
-          installmentsData = instData || [];
+        if (purchasesErr) {
+          console.warn('Erro ao carregar compras:', purchasesErr.message);
+          setPurchases([]);
+        } else {
+          setPurchases(purchasesData || []);
 
-          if (installmentsData.length > 0) {
-            const installmentIds = installmentsData.map(i => i.id);
-            const { data: instFrData, error: instFrErr } = await supabase
-              .from('installment_friends')
+          if (purchasesData && purchasesData.length > 0) {
+            const purchaseIds = purchasesData.map(p => p.id);
+            
+            const { data: instData, error: instErr } = await supabase
+              .from('installments')
               .select('*')
-              .in('installment_id', installmentIds);
-            if (instFrErr) throw instFrErr;
-            instFriendsData = instFrData || [];
+              .in('purchase_id', purchaseIds)
+              .order('due_date');
+            
+            if (instErr) {
+              console.warn('Erro ao carregar parcelas:', instErr.message);
+            } else {
+              installmentsData = instData || [];
+
+              if (installmentsData.length > 0) {
+                const installmentIds = installmentsData.map(i => i.id);
+                const { data: instFrData, error: instFrErr } = await supabase
+                  .from('installment_friends')
+                  .select('*')
+                  .in('installment_id', installmentIds);
+                if (!instFrErr && instFrData) {
+                  instFriendsData = instFrData;
+                }
+              }
+            }
           }
         }
 
-        setCards(cardsData || []);
-        setFriends(friendsData || []);
-        setPurchases(purchasesData || []);
         setInstallments(installmentsData);
         setInstallmentFriends(instFriendsData);
 
@@ -391,9 +358,8 @@ export default function App() {
           setPurchaseCard(cardsData[0].id);
         }
       } catch (err: any) {
-        console.error('Erro ao carregar dados do Supabase:', err.message);
-        triggerNotification('Erro ao sincronizar com o Supabase. Utilizando modo local.', 'error');
-        // fallback silencioso
+        console.error('Erro crítico de conexão com o Supabase:', err.message);
+        triggerNotification('Erro crítico de conexão com o Supabase. Utilizando modo local.', 'error');
         setIsGuest(true);
       } finally {
         setLoadingData(false);
@@ -503,14 +469,16 @@ export default function App() {
           return;
         }
 
-        const newCardDataWithUser = {
-          ...newCardData,
-          user_id: user.id
-        };
-
         const { data, error } = await supabase!
           .from('cards')
-          .insert([newCardDataWithUser])
+          .insert([{
+            name: cardName,
+            limit: parseFloat(cardLimit),
+            due_day: parseInt(cardDueDay),
+            closing_day: parseInt(cardClosingDay),
+            color: cardColor,
+            user_id: user.id
+          }])
           .select('id, user_id, name, "limit", due_day, closing_day, color');
         if (error) throw error;
         if (data) setCards([...cards, data[0]]);
