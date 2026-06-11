@@ -1,16 +1,16 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { 
-  CreditCard as CardIcon, 
-  Users, 
-  PlusCircle, 
-  FileText, 
-  Home, 
-  LogOut, 
-  Plus, 
-  Trash2, 
-  Check, 
-  User as UserIcon, 
-  AlertCircle, 
+import {
+  CreditCard as CardIcon,
+  Users,
+  PlusCircle,
+  FileText,
+  Home,
+  LogOut,
+  Plus,
+  Trash2,
+  Check,
+  User as UserIcon,
+  AlertCircle,
   CheckCircle2,
   Smartphone,
   ArrowLeft
@@ -37,7 +37,7 @@ const INITIAL_PURCHASES: Purchase[] = [
 // Gera as parcelas correspondentes às compras iniciais
 const generateInitialInstallments = (): Installment[] => {
   const installments: Installment[] = [];
-  
+
   // Notebook (c1) - R$ 3600 em 12x de R$ 300. Compra em 10/05/2026. Parcelas vencem em Junho/2026 até Maio/2027
   // Primeira parcela vence em 10/06/2026 (Devido ao dia de vencimento ser 10)
   for (let i = 1; i <= 12; i++) {
@@ -162,7 +162,7 @@ export default function App() {
   const [purchaseCategory, setPurchaseCategory] = useState('Geral');
   const [purchaseDate, setPurchaseDate] = useState(new Date().toISOString().split('T')[0]);
   const [selectedFriendsForDivision, setSelectedFriendsForDivision] = useState<string[]>([]);
-  
+
   // Alertas
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
@@ -262,7 +262,7 @@ export default function App() {
         localStorage.setItem(`fx_cards_${userId}`, JSON.stringify(INITIAL_CARDS));
         localStorage.setItem(`fx_friends_${userId}`, JSON.stringify(INITIAL_FRIENDS));
         localStorage.setItem(`fx_purchases_${userId}`, JSON.stringify(INITIAL_PURCHASES));
-        
+
         const insts = generateInitialInstallments();
         const instFrs = generateInitialInstallmentFriends();
         localStorage.setItem(`fx_installments_${userId}`, JSON.stringify(insts));
@@ -286,7 +286,7 @@ export default function App() {
           .from('cards')
           .select('id, user_id, name, "limit", due_day, closing_day, color')
           .order('name');
-        
+
         if (cardsErr) {
           console.warn('Erro ao carregar cartões (banco pode estar vazio):', cardsErr.message);
           setCards([]);
@@ -299,7 +299,7 @@ export default function App() {
           .from('friends')
           .select('*')
           .order('name');
-        
+
         if (friendsErr) {
           console.warn('Erro ao carregar amigos:', friendsErr.message);
           setFriends([]);
@@ -312,7 +312,7 @@ export default function App() {
           .from('purchases')
           .select('*')
           .order('purchase_date', { ascending: false });
-        
+
         let installmentsData: Installment[] = [];
         let instFriendsData: InstallmentFriend[] = [];
 
@@ -324,13 +324,13 @@ export default function App() {
 
           if (purchasesData && purchasesData.length > 0) {
             const purchaseIds = purchasesData.map(p => p.id);
-            
+
             const { data: instData, error: instErr } = await supabase
               .from('installments')
               .select('*')
               .in('purchase_id', purchaseIds)
               .order('due_date');
-            
+
             if (instErr) {
               console.warn('Erro ao carregar parcelas:', instErr.message);
             } else {
@@ -385,7 +385,7 @@ export default function App() {
     e.preventDefault();
     setErrorMessage('');
     setSuccessMessage('');
-    
+
     if (!isSupabaseConfigured) {
       setErrorMessage('O Supabase não está configurado. Use o modo Convidado para testar.');
       return;
@@ -580,7 +580,7 @@ export default function App() {
     if (isGuest || !supabase) {
       const updatedFriends = friends.filter(f => f.id !== id);
       const updatedInstFriends = installmentFriends.filter(ifriend => ifriend.friend_id !== id);
-      
+
       setFriends(updatedFriends);
       setInstallmentFriends(updatedInstFriends);
 
@@ -627,7 +627,7 @@ export default function App() {
       // Simplificando lógica padrão de faturamento de cartão:
       // Se comprar após o fechamento, joga 1 mês pra frente.
       let dueMonthOffset = i - 1;
-      
+
       if (purchaseDay >= selectedCard.closing_day) {
         // Comprou após o fechamento, joga a primeira parcela para o próximo mês
         dueMonthOffset += 1;
@@ -636,9 +636,9 @@ export default function App() {
       const instDate = new Date(purchaseYear, purchaseMonth + dueMonthOffset, selectedCard.due_day);
       const formattedDate = instDate.toISOString().split('T')[0];
       const instAmount = parseFloat((amount / instCount).toFixed(2));
-      
+
       // Ajuste na última parcela para evitar perda de centavos por dízima
-      const finalAmount = i === instCount 
+      const finalAmount = i === instCount
         ? parseFloat((amount - (instAmount * (instCount - 1))).toFixed(2))
         : instAmount;
 
@@ -674,7 +674,7 @@ export default function App() {
       }));
 
       const newInstFriends: InstallmentFriend[] = [];
-      
+
       if (selectedFriendsForDivision.length > 0) {
         // Divisão igualitária incluindo o proprietário
         const divisor = selectedFriendsForDivision.length + 1; // Amigos + Dono do cartão
@@ -731,7 +731,7 @@ export default function App() {
             user_id: user.id
           }])
           .select();
-        
+
         if (pError) throw pError;
         const purchase = pData[0];
 
@@ -750,7 +750,7 @@ export default function App() {
           .select();
 
         if (iError) throw iError;
-        
+
         // 3. Cadastra a divisão com amigos (se houver)
         if (selectedFriendsForDivision.length > 0 && iData) {
           const divisor = selectedFriendsForDivision.length + 1;
@@ -846,13 +846,13 @@ export default function App() {
           .from('installment_friends')
           .update({ status: newStatus })
           .eq('id', instFriendId);
-        
+
         if (error) throw error;
-        
-        setInstallmentFriends(installmentFriends.map(item => 
+
+        setInstallmentFriends(installmentFriends.map(item =>
           item.id === instFriendId ? { ...item, status: newStatus as 'pending' | 'paid' } : item
         ));
-        
+
         triggerNotification(newStatus === 'paid' ? 'Marcado como pago!' : 'Pagamento cancelado.');
       } catch (err: any) {
         triggerNotification('Erro ao alterar status: ' + err.message, 'error');
@@ -880,10 +880,10 @@ export default function App() {
           .from('installments')
           .update({ status: newStatus })
           .eq('id', installmentId);
-        
+
         if (error) throw error;
 
-        setInstallments(installments.map(item => 
+        setInstallments(installments.map(item =>
           item.id === installmentId ? { ...item, status: newStatus as 'pending' | 'paid' } : item
         ));
 
@@ -911,11 +911,11 @@ export default function App() {
   // Resumo de gastos por pessoa para o cartão selecionado no mês/ano atual
   const cardPersonGastos = useMemo(() => {
     if (!selectedCardId) return [];
-    
+
     // Filtra compras deste cartão
     const cardPurchases = purchases.filter(p => p.card_id === selectedCardId);
     const cardPurchaseIds = cardPurchases.map(p => p.id);
-    
+
     // Parcelas deste cartão no mês/ano atual
     const cardMonthInstallments = installments.filter(inst => {
       if (!cardPurchaseIds.includes(inst.purchase_id)) return false;
@@ -927,7 +927,7 @@ export default function App() {
 
     cardMonthInstallments.forEach(inst => {
       const friendsAssigned = installmentFriends.filter(ifriend => ifriend.installment_id === inst.id);
-      
+
       if (friendsAssigned.length > 0) {
         // Amigos participando do rateio
         friendsAssigned.forEach(fa => {
@@ -957,7 +957,7 @@ export default function App() {
 
     const cardPurchases = purchases.filter(p => p.card_id === selectedCardId);
     const cardPurchaseIds = cardPurchases.map(p => p.id);
-    
+
     // Parcelas deste cartão no mês/ano atual
     const cardMonthInstallments = installments.filter(inst => {
       if (!cardPurchaseIds.includes(inst.purchase_id)) return false;
@@ -970,7 +970,7 @@ export default function App() {
       if (!purchase) return null;
 
       const friendsAssigned = installmentFriends.filter(ifriend => ifriend.installment_id === inst.id);
-      
+
       let ownerNames = 'Você';
       if (friendsAssigned.length > 0) {
         const friendNames = friendsAssigned
@@ -1006,7 +1006,7 @@ export default function App() {
       const purchase = purchases.find(p => p.id === inst.purchase_id);
       const card = purchase ? cards.find(c => c.id === purchase.card_id) : null;
       const friendsAssigned = installmentFriends.filter(ifriend => ifriend.installment_id === inst.id);
-      
+
       // Calcula a fatia do dono (total da parcela menos a soma do que os amigos devem)
       const friendsTotal = friendsAssigned.reduce((acc, curr) => acc + curr.amount, 0);
       const ownerShare = Math.max(0, inst.amount - friendsTotal);
@@ -1064,7 +1064,7 @@ export default function App() {
   // Gastos a receber detalhados por amigo no mês selecionado
   const friendsDebtsForMonth = useMemo(() => {
     const debts: { [friendId: string]: { name: string; toReceive: number; received: number } } = {};
-    
+
     // Inicializa amigos
     friends.forEach(f => {
       debts[f.id] = { name: f.name, toReceive: 0, received: 0 };
@@ -1089,7 +1089,7 @@ export default function App() {
   // Limite total vs limite usado
   const limitStats = useMemo(() => {
     const totalLimit = cards.reduce((acc, curr) => acc + curr.limit, 0);
-    
+
     // Limite usado é a soma de todas as parcelas pendentes futuras
     const pendingInstallmentsTotal = installments
       .filter(i => i.status === 'pending')
@@ -1261,7 +1261,7 @@ export default function App() {
     <div className="min-h-screen bg-neutral-950 flex justify-center text-slate-100 font-sans pb-24">
       {/* Container Responsivo simulando tela de smartphone premium centralizado */}
       <div className="w-full max-w-md bg-background min-h-screen flex flex-col relative border-x border-border shadow-2xl">
-        
+
         {/* Banner de Modo Convidado */}
         {isGuest && (
           <div className="bg-gradient-to-r from-yellow-600/30 to-amber-700/20 border-b border-yellow-500/20 py-1.5 px-4 text-center text-[10px] text-yellow-300 font-medium tracking-wide flex justify-center items-center gap-1">
@@ -1273,9 +1273,6 @@ export default function App() {
         {/* TOP BAR */}
         <header className="px-6 py-4 flex items-center justify-between border-b border-border bg-card/40 sticky top-0 z-40 backdrop-blur-md">
           <div className="flex items-center gap-2">
-            <div className="w-8 h-8 bg-gradient-to-tr from-accent to-purple-600 rounded-lg flex items-center justify-center shadow-md shadow-accent/15">
-              <CardIcon className="w-4.5 h-4.5 text-white" />
-            </div>
             <span className="font-extrabold text-lg tracking-tight text-white">
               Fatura<span className="text-accent">X</span>
             </span>
@@ -1288,7 +1285,7 @@ export default function App() {
               <UserIcon className="w-3 h-3 text-accent" />
               {isGuest ? 'Convidado' : session?.user.email?.split('@')[0]}
             </span>
-            <button 
+            <button
               onClick={handleLogout}
               className="p-2 hover:bg-zinc-800 rounded-full transition-all text-textMuted hover:text-danger"
               title="Sair"
@@ -1300,11 +1297,10 @@ export default function App() {
 
         {/* NOTIFICAÇÃO TOAST */}
         {notification && (
-          <div className={`fixed top-16 left-1/2 -translate-x-1/2 z-50 px-4 py-2.5 rounded-full text-xs font-semibold shadow-premium-sm border transition-all animate-slide-up flex items-center gap-2 ${
-            notification.type === 'success' 
-              ? 'bg-success/15 border-success/30 text-success' 
+          <div className={`fixed top-16 left-1/2 -translate-x-1/2 z-50 px-4 py-2.5 rounded-full text-xs font-semibold shadow-premium-sm border transition-all animate-slide-up flex items-center gap-2 ${notification.type === 'success'
+              ? 'bg-success/15 border-success/30 text-success'
               : 'bg-danger/15 border-danger/30 text-danger'
-          }`}>
+            }`}>
             {notification.type === 'success' ? <Check className="w-4.5 h-4.5" /> : <AlertCircle className="w-4.5 h-4.5" />}
             <span>{notification.text}</span>
           </div>
@@ -1312,7 +1308,7 @@ export default function App() {
 
         {/* PÁGINAS (CONTEÚDO DINÂMICO BASEADO NA ABA ATIVA) */}
         <main className="flex-1 p-6 overflow-y-auto">
-          
+
           {/* ================= ABA: INÍCIO (DASHBOARD) ================= */}
           {activeTab === 'home' && (
             <div className="space-y-6 animate-slide-up">
@@ -1355,7 +1351,7 @@ export default function App() {
                       </span>
                     </div>
                     <div className="w-full bg-zinc-800 rounded-full h-1.5 overflow-hidden">
-                      <div 
+                      <div
                         className="bg-success h-full transition-all duration-500"
                         style={{ width: `${(friendsReceivedTotal / friendsShareTotal) * 100}%` }}
                       ></div>
@@ -1376,7 +1372,7 @@ export default function App() {
                   </span>
                 </div>
                 <div className="w-full bg-zinc-900 rounded-full h-2 overflow-hidden mb-3">
-                  <div 
+                  <div
                     className="bg-gradient-to-r from-accent to-purple-500 h-full transition-all duration-500"
                     style={{ width: `${limitStats.percentage}%` }}
                   ></div>
@@ -1396,7 +1392,7 @@ export default function App() {
               {/* GRÁFICO SIMPLES POR CATEGORIA */}
               <div className="bg-card border border-border rounded-2xl p-4">
                 <h4 className="text-xs font-semibold text-white uppercase tracking-wider mb-3">Gastos por Categoria (Jun/26)</h4>
-                
+
                 {categoryStats.length === 0 ? (
                   <p className="text-xs text-textMuted text-center py-4">Nenhuma compra parcelada neste mês.</p>
                 ) : (
@@ -1410,8 +1406,8 @@ export default function App() {
                             <span className="text-white font-bold">R$ {stat.value.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
                           </div>
                           <div className="w-full bg-zinc-900 rounded-full h-1">
-                            <div 
-                              className="bg-indigo-500 h-1 rounded-full" 
+                            <div
+                              className="bg-indigo-500 h-1 rounded-full"
                               style={{ width: `${percentage}%` }}
                             ></div>
                           </div>
@@ -1459,7 +1455,7 @@ export default function App() {
               {/* PRÓXIMOS VENCIMENTOS */}
               <div className="space-y-3">
                 <h4 className="text-xs font-semibold text-white uppercase tracking-wider">Próximos Vencimentos (15 dias)</h4>
-                
+
                 {upcomingBills.length === 0 ? (
                   <p className="text-xs text-textMuted text-center py-6 bg-card/30 border border-dashed border-border rounded-2xl">
                     Nenhuma parcela pendente nos próximos 15 dias.
@@ -1587,7 +1583,7 @@ export default function App() {
                           <h4 className="text-xs font-bold text-white uppercase tracking-wider">Gastos por Pessoa</h4>
                           <span className="text-[10px] text-textMuted font-medium font-sans">Divisão no Cartão</span>
                         </div>
-                        
+
                         {cardPersonGastos.length === 0 ? (
                           <p className="text-xs text-textMuted text-center py-4">Sem compras parceladas para este cartão no mês selecionado.</p>
                         ) : (
@@ -1608,8 +1604,8 @@ export default function App() {
                                     </span>
                                   </div>
                                   <div className="w-full bg-zinc-900 h-1.5 rounded-full overflow-hidden">
-                                    <div 
-                                      className="bg-gradient-to-r from-accent to-indigo-500 h-full rounded-full transition-all duration-500" 
+                                    <div
+                                      className="bg-gradient-to-r from-accent to-indigo-500 h-full rounded-full transition-all duration-500"
                                       style={{ width: `${percentage}%` }}
                                     ></div>
                                   </div>
@@ -1623,7 +1619,7 @@ export default function App() {
                       {/* SEÇÃO 2: HISTÓRICO DE COMPRAS DA FATURA */}
                       <div className="space-y-3">
                         <h4 className="text-xs font-semibold text-white uppercase tracking-wider">Histórico de Compras da Fatura</h4>
-                        
+
                         {cardDetailedPurchases.length === 0 ? (
                           <p className="text-xs text-textMuted text-center py-8 bg-card/30 border border-dashed border-border rounded-2xl">
                             Nenhuma compra registrada para este cartão em {['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'][selectedMonth - 1]}/{selectedYear}.
@@ -1683,7 +1679,7 @@ export default function App() {
                   {showAddCardForm && (
                     <form onSubmit={handleAddCard} className="bg-card border border-border p-5 rounded-2xl space-y-4 animate-slide-up">
                       <h3 className="text-sm font-bold text-white">Cadastrar Novo Cartão</h3>
-                      
+
                       <div>
                         <label className="block text-[11px] text-textMuted font-medium mb-1">Nome do Cartão (ex: Nubank Visa)</label>
                         <input
@@ -1792,13 +1788,13 @@ export default function App() {
                         return (
                           <div key={card.id} className="space-y-2">
                             {/* Cartão físico premium clicável */}
-                            <div 
+                            <div
                               onClick={() => setSelectedCardId(card.id)}
                               className={`relative bg-gradient-to-tr ${card.color} text-white rounded-2xl p-6 shadow-premium overflow-hidden aspect-[1.58/1] cursor-pointer hover:scale-[1.01] active:scale-[0.99] transition-all`}
                             >
                               {/* Chip / Elemento decorativo */}
                               <div className="absolute top-6 left-6 w-10 h-8 bg-amber-400/20 border border-amber-300/30 rounded-md"></div>
-                              
+
                               {/* Nome do cartão */}
                               <div className="absolute top-6 right-6 font-extrabold text-sm tracking-wide opacity-90 uppercase">
                                 {card.name}
@@ -1886,7 +1882,7 @@ export default function App() {
               {showAddFriendForm && (
                 <form onSubmit={handleAddFriend} className="bg-card border border-border p-5 rounded-2xl space-y-4 animate-slide-up">
                   <h3 className="text-sm font-bold text-white">Adicionar Novo Amigo</h3>
-                  
+
                   <div>
                     <label className="block text-[11px] text-textMuted font-medium mb-1">Nome Completo ou Apelido</label>
                     <input
@@ -1940,8 +1936,8 @@ export default function App() {
                           <div>
                             <h4 className="text-sm font-bold text-white">{friend.name}</h4>
                             <span className="text-[10px] text-textMuted">
-                              {totalPendingToReceive > 0 
-                                ? `Possui rateios pendentes` 
+                              {totalPendingToReceive > 0
+                                ? `Possui rateios pendentes`
                                 : 'Sem pendências financeiras'}
                             </span>
                           </div>
@@ -2090,11 +2086,10 @@ export default function App() {
                         {friends.map(friend => {
                           const isSelected = selectedFriendsForDivision.includes(friend.id);
                           return (
-                            <label 
-                              key={friend.id} 
-                              className={`flex items-center justify-between p-2 rounded-lg cursor-pointer transition-all ${
-                                isSelected ? 'bg-accent/10 border border-accent/20' : 'hover:bg-zinc-900 border border-transparent'
-                              }`}
+                            <label
+                              key={friend.id}
+                              className={`flex items-center justify-between p-2 rounded-lg cursor-pointer transition-all ${isSelected ? 'bg-accent/10 border border-accent/20' : 'hover:bg-zinc-900 border border-transparent'
+                                }`}
                             >
                               <span className="text-xs font-medium text-white">{friend.name}</span>
                               <input
@@ -2146,7 +2141,7 @@ export default function App() {
               {/* LISTA DE COMPRAS RECENTES */}
               <div className="space-y-3">
                 <h4 className="text-xs font-semibold text-white uppercase tracking-wider">Histórico de Compras</h4>
-                
+
                 {purchases.length === 0 ? (
                   <p className="text-xs text-textMuted text-center py-6">Nenhuma compra cadastrada no histórico.</p>
                 ) : (
@@ -2227,7 +2222,7 @@ export default function App() {
               {/* COMPOSIÇÃO DE GASTOS DO MÊS */}
               <div className="bg-gradient-to-br from-zinc-900 to-zinc-950 border border-border p-5 rounded-2xl space-y-4">
                 <h3 className="text-xs font-bold text-white uppercase tracking-wider">Fechamento do Mês</h3>
-                
+
                 <div className="grid grid-cols-3 gap-2 text-center">
                   <div className="bg-card/80 border border-border/80 p-3 rounded-xl">
                     <span className="text-[9px] text-textMuted uppercase block">Fatura Total</span>
@@ -2291,9 +2286,8 @@ export default function App() {
                               return (
                                 <div key={fAssigned.id} className="flex justify-between items-center bg-background/50 border border-border/40 p-2.5 rounded-xl">
                                   <div className="flex items-center gap-2">
-                                    <div className={`w-7 h-7 rounded-lg flex items-center justify-center text-[10px] font-bold ${
-                                      isPaid ? 'bg-success/10 text-success border border-success/20' : 'bg-accent/10 text-accent border border-accent/20'
-                                    }`}>
+                                    <div className={`w-7 h-7 rounded-lg flex items-center justify-center text-[10px] font-bold ${isPaid ? 'bg-success/10 text-success border border-success/20' : 'bg-accent/10 text-accent border border-accent/20'
+                                      }`}>
                                       {friend?.name.substring(0, 2).toUpperCase() || 'AM'}
                                     </div>
                                     <div>
@@ -2305,11 +2299,10 @@ export default function App() {
                                   </div>
                                   <button
                                     onClick={() => toggleFriendPaidStatus(fAssigned.id, fAssigned.status)}
-                                    className={`text-xs font-semibold px-3 py-1.5 rounded-lg transition-all flex items-center gap-1 border ${
-                                      isPaid 
-                                        ? 'bg-success/15 border-success/30 text-success hover:bg-success/20' 
+                                    className={`text-xs font-semibold px-3 py-1.5 rounded-lg transition-all flex items-center gap-1 border ${isPaid
+                                        ? 'bg-success/15 border-success/30 text-success hover:bg-success/20'
                                         : 'bg-zinc-800 border-border text-zinc-300 hover:bg-zinc-700'
-                                    }`}
+                                      }`}
                                   >
                                     <Check className="w-3.5 h-3.5" />
                                     {isPaid ? 'Pago' : 'Marcar Pago'}
@@ -2328,7 +2321,7 @@ export default function App() {
               {/* LISTA COMPLETA DE PARCELAS DO MÊS PARA O PROPRIETÁRIO */}
               <div className="space-y-3">
                 <h3 className="text-xs font-bold text-white uppercase tracking-wider">Suas Parcelas e Faturas Individuais</h3>
-                
+
                 {enrichedMonthInstallments.length === 0 ? (
                   <p className="text-xs text-textMuted text-center py-6">Nenhuma parcela cadastrada para vencer este mês.</p>
                 ) : (
@@ -2338,11 +2331,10 @@ export default function App() {
                         <div className="flex items-center gap-2.5">
                           <button
                             onClick={() => toggleInstallmentStatus(inst.id, inst.status)}
-                            className={`w-5 h-5 rounded border flex items-center justify-center transition-all ${
-                              inst.status === 'paid' 
-                                ? 'bg-success border-success text-white' 
+                            className={`w-5 h-5 rounded border flex items-center justify-center transition-all ${inst.status === 'paid'
+                                ? 'bg-success border-success text-white'
                                 : 'border-border bg-background text-transparent hover:border-accent'
-                            }`}
+                              }`}
                           >
                             <Check className="w-3.5 h-3.5 stroke-[3]" />
                           </button>
@@ -2377,28 +2369,26 @@ export default function App() {
 
         {/* BOTTOM NAVIGATION BAR (FIXA PARA MOBILE) */}
         <nav className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-md bottom-nav-blur h-20 px-4 flex items-center justify-around z-40">
-          <button 
+          <button
             onClick={() => setActiveTab('home')}
-            className={`flex flex-col items-center gap-1 py-2 px-3 rounded-xl transition-all ${
-              activeTab === 'home' ? 'text-accent' : 'text-textMuted hover:text-slate-200'
-            }`}
+            className={`flex flex-col items-center gap-1 py-2 px-3 rounded-xl transition-all ${activeTab === 'home' ? 'text-accent' : 'text-textMuted hover:text-slate-200'
+              }`}
           >
             <Home className="w-5.5 h-5.5 stroke-[2]" />
             <span className="text-[10px] font-bold">Início</span>
           </button>
-          
-          <button 
+
+          <button
             onClick={() => setActiveTab('cards')}
-            className={`flex flex-col items-center gap-1 py-2 px-3 rounded-xl transition-all ${
-              activeTab === 'cards' ? 'text-accent' : 'text-textMuted hover:text-slate-200'
-            }`}
+            className={`flex flex-col items-center gap-1 py-2 px-3 rounded-xl transition-all ${activeTab === 'cards' ? 'text-accent' : 'text-textMuted hover:text-slate-200'
+              }`}
           >
             <CardIcon className="w-5.5 h-5.5 stroke-[2]" />
             <span className="text-[10px] font-bold">Cartões</span>
           </button>
 
           {/* Botão de Adição Rápida centralizado */}
-          <button 
+          <button
             onClick={() => setActiveTab('purchases')}
             className={`flex flex-col items-center justify-center w-12 h-12 rounded-full bg-gradient-to-tr from-accent to-indigo-700 text-white shadow-lg shadow-accent/20 hover:scale-105 transition-all -translate-y-2 border border-white/10`}
             title="Lançar Nova Compra"
@@ -2406,21 +2396,19 @@ export default function App() {
             <Plus className="w-6 h-6 stroke-[2.5]" />
           </button>
 
-          <button 
+          <button
             onClick={() => setActiveTab('friends')}
-            className={`flex flex-col items-center gap-1 py-2 px-3 rounded-xl transition-all ${
-              activeTab === 'friends' ? 'text-accent' : 'text-textMuted hover:text-slate-200'
-            }`}
+            className={`flex flex-col items-center gap-1 py-2 px-3 rounded-xl transition-all ${activeTab === 'friends' ? 'text-accent' : 'text-textMuted hover:text-slate-200'
+              }`}
           >
             <Users className="w-5.5 h-5.5 stroke-[2]" />
             <span className="text-[10px] font-bold">Amigos</span>
           </button>
 
-          <button 
+          <button
             onClick={() => setActiveTab('reports')}
-            className={`flex flex-col items-center gap-1 py-2 px-3 rounded-xl transition-all ${
-              activeTab === 'reports' ? 'text-accent' : 'text-textMuted hover:text-slate-200'
-            }`}
+            className={`flex flex-col items-center gap-1 py-2 px-3 rounded-xl transition-all ${activeTab === 'reports' ? 'text-accent' : 'text-textMuted hover:text-slate-200'
+              }`}
           >
             <FileText className="w-5.5 h-5.5 stroke-[2]" />
             <span className="text-[10px] font-bold">Relatórios</span>
