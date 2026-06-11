@@ -228,22 +228,19 @@ export default function App() {
       // 1. Lê os dados locais do guest
       const localCardsStr = localStorage.getItem(`fx_cards_guest`);
       const localFriendsStr = localStorage.getItem(`fx_friends_guest`);
-      const localPurchasesStr = localStorage.getItem(`fx_purchases_guest`);
 
       const localCards: CreditCard[] = localCardsStr ? JSON.parse(localCardsStr) : [];
       const localFriends: Friend[] = localFriendsStr ? JSON.parse(localFriendsStr) : [];
-      const localPurchases: Purchase[] = localPurchasesStr ? JSON.parse(localPurchasesStr) : [];
 
       // Filtra cartões que não sejam os mocks padrão originais para evitar duplicá-los no banco
       const userAddedCards = localCards.filter(c => c.id !== 'c1' && c.id !== 'c2');
       const userAddedFriends = localFriends.filter(f => f.id !== 'f1' && f.id !== 'f2' && f.id !== 'f3');
-      const userAddedPurchases = localPurchases.filter(p => p.id !== 'p1' && p.id !== 'p2');
 
       console.log('Sincronizando dados locais para o Supabase... ', userAddedCards);
 
-      // Regra 1: Se o array de dados locais personalizados estiver vazio, ignora e segue em frente
-      if (userAddedCards.length === 0 && userAddedFriends.length === 0 && userAddedPurchases.length === 0) {
-        console.log('Nenhum dado local personalizado para sincronizar. Banco limpo.');
+      // Se não há cartões locais personalizados criados, assume que não há nada a sincronizar e retorna de imediato
+      if (userAddedCards.length === 0) {
+        console.log('Nenhum cartão local personalizado para sincronizar. Banco limpo.');
         return;
       }
 
@@ -336,10 +333,10 @@ export default function App() {
         // Sincroniza dados do modo Convidado (guest) com o Supabase antes do carregamento
         await syncLocalDataWithSupabase(userId);
 
-        // Carrega Cartões
+        // Carrega Cartões selecionando as colunas explicitamente, com "limit" entre aspas duplas por ser palavra reservada
         const { data: cardsData, error: cardsErr } = await supabase
           .from('cards')
-          .select('*')
+          .select('id, user_id, name, "limit", due_day, closing_day, color')
           .order('name');
         if (cardsErr) throw cardsErr;
 
@@ -514,7 +511,7 @@ export default function App() {
         const { data, error } = await supabase!
           .from('cards')
           .insert([newCardDataWithUser])
-          .select();
+          .select('id, user_id, name, "limit", due_day, closing_day, color');
         if (error) throw error;
         if (data) setCards([...cards, data[0]]);
         triggerNotification('Cartão cadastrado com sucesso!');
