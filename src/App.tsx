@@ -13,7 +13,8 @@ import {
   AlertCircle,
   CheckCircle2,
   Smartphone,
-  ArrowLeft
+  ArrowLeft,
+  Edit
 } from 'lucide-react';
 import { supabase, isSupabaseConfigured, CreditCard, Friend, Purchase, Installment, InstallmentFriend } from './lib/supabase';
 
@@ -151,6 +152,8 @@ export default function App() {
   const [cardDueDay, setCardDueDay] = useState('10');
   const [cardClosingDay, setCardClosingDay] = useState('3');
   const [cardColor, setCardColor] = useState('from-indigo-600 to-purple-600');
+  const [editingCardId, setEditingCardId] = useState<string | null>(null);
+  const [expandedFriendId, setExpandedFriendId] = useState<string | null>(null);
 
   const [showAddFriendForm, setShowAddFriendForm] = useState(false);
   const [friendName, setFriendName] = useState('');
@@ -443,6 +446,26 @@ export default function App() {
   };
 
   // --- MÓDULO DE CARTÕES ---
+  const startEditCard = (card: CreditCard) => {
+    setEditingCardId(card.id);
+    setCardName(card.name);
+    setCardLimit(card.limit.toString());
+    setCardDueDay(card.due_day.toString());
+    setCardClosingDay(card.closing_day.toString());
+    setCardColor(card.color);
+    setShowAddCardForm(true);
+  };
+
+  const clearCardForm = () => {
+    setCardName('');
+    setCardLimit('');
+    setCardDueDay('10');
+    setCardClosingDay('3');
+    setCardColor('from-indigo-600 to-purple-600');
+    setEditingCardId(null);
+    setShowAddCardForm(false);
+  };
+
   const handleAddCard = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!cardName || !cardLimit) return;
@@ -457,15 +480,24 @@ export default function App() {
 
     if (isGuest || !supabase) {
       // Offline
-      const newCard: CreditCard = {
-        id: 'c-' + Date.now(),
-        user_id: 'guest',
-        ...newCardData
-      };
-      const updated = [...cards, newCard];
-      setCards(updated);
-      saveOfflineData('cards', updated);
-      triggerNotification('Cartão cadastrado localmente!');
+      if (editingCardId) {
+        // Editando
+        const updated = cards.map(c => c.id === editingCardId ? { ...c, ...newCardData } : c);
+        setCards(updated);
+        saveOfflineData('cards', updated);
+        triggerNotification('Cartão atualizado localmente!');
+      } else {
+        // Criando novo
+        const newCard: CreditCard = {
+          id: 'c-' + Date.now(),
+          user_id: 'guest',
+          ...newCardData
+        };
+        const updated = [...cards, newCard];
+        setCards(updated);
+        saveOfflineData('cards', updated);
+        triggerNotification('Cartão cadastrado localmente!');
+      }
     } else {
       // Online
       try {
@@ -475,31 +507,49 @@ export default function App() {
           return;
         }
 
-        const { data, error } = await supabase!
-          .from('cards')
-          .insert([{
-            name: cardName,
-            limit: parseFloat(cardLimit),
-            due_day: parseInt(cardDueDay),
-            closing_day: parseInt(cardClosingDay),
-            color: cardColor,
-            user_id: user.id
-          }])
-          .select('id, user_id, name, "limit", due_day, closing_day, color');
-        if (error) throw error;
-        if (data) setCards([...cards, data[0]]);
-        triggerNotification('Cartão cadastrado com sucesso!');
+        if (editingCardId) {
+          // Editando no Supabase
+          const { data, error } = await supabase!
+            .from('cards')
+            .update({
+              name: cardName,
+              limit: parseFloat(cardLimit),
+              due_day: parseInt(cardDueDay),
+              closing_day: parseInt(cardClosingDay),
+              color: cardColor,
+            })
+            .eq('id', editingCardId)
+            .select('id, user_id, name, "limit", due_day, closing_day, color');
+
+          if (error) throw error;
+          if (data) {
+            setCards(cards.map(c => c.id === editingCardId ? data[0] : c));
+          }
+          triggerNotification('Cartão atualizado com sucesso!');
+        } else {
+          // Criando no Supabase
+          const { data, error } = await supabase!
+            .from('cards')
+            .insert([{
+              name: cardName,
+              limit: parseFloat(cardLimit),
+              due_day: parseInt(cardDueDay),
+              closing_day: parseInt(cardClosingDay),
+              color: cardColor,
+              user_id: user.id
+            }])
+            .select('id, user_id, name, "limit", due_day, closing_day, color');
+          if (error) throw error;
+          if (data) setCards([...cards, data[0]]);
+          triggerNotification('Cartão cadastrado com sucesso!');
+        }
       } catch (err: any) {
         triggerNotification('Erro ao salvar cartão: ' + err.message, 'error');
       }
     }
 
     // Limpa form
-    setCardName('');
-    setCardLimit('');
-    setCardDueDay('10');
-    setCardClosingDay('3');
-    setShowAddCardForm(false);
+    clearCardForm();
   };
 
   const handleDeleteCard = async (id: string) => {
@@ -535,6 +585,82 @@ export default function App() {
         triggerNotification('Cartão removido.');
       } catch (err: any) {
         triggerNotification('Erro ao remover: ' + err.message, 'error');
+      }
+    }
+  };
+
+  const handlePayCardInvoice = async (cardId: string) => {
+    const card = cards.find(c => c.id === cardId);
+    if (!card) return;
+
+    const cycle = cardActiveBillCycles[cardId];
+    if (!cycle) return;
+
+    if (!confirm(`Deseja realmente marcar como paga a fatura de ${['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'][cycle.month - 1]}/${cycle.year} deste cartão?`)) {
+      return;
+    }
+
+    // Identificar compras deste cartão
+    const cardPurchases = purchases.filter(p => p.card_id === cardId);
+    const cardPurchaseIds = cardPurchases.map(p => p.id);
+
+    // Filtrar parcelas pendentes deste ciclo
+    const targetInstallments = installments.filter(inst => {
+      if (inst.status !== 'pending' || !cardPurchaseIds.includes(inst.purchase_id)) return false;
+      const parts = inst.due_date.split('-');
+      if (parts.length >= 2) {
+        const year = parseInt(parts[0], 10);
+        const month = parseInt(parts[1], 10);
+        return month === cycle.month && year === cycle.year;
+      }
+      return false;
+    });
+
+    const targetInstallmentIds = targetInstallments.map(i => i.id);
+
+    if (targetInstallmentIds.length === 0) {
+      triggerNotification('Nenhuma parcela pendente nesta fatura.', 'error');
+      return;
+    }
+
+    if (isGuest || !supabase) {
+      // Offline LocalStorage
+      const updatedInstallments = installments.map(inst => 
+        targetInstallmentIds.includes(inst.id) ? { ...inst, status: 'paid' as const } : inst
+      );
+      const updatedInstFriends = installmentFriends.map(ifriend => 
+        targetInstallmentIds.includes(ifriend.installment_id) ? { ...ifriend, status: 'paid' as const } : ifriend
+      );
+
+      setInstallments(updatedInstallments);
+      setInstallmentFriends(updatedInstFriends);
+
+      saveOfflineData('installments', updatedInstallments);
+      saveOfflineData('inst_friends', updatedInstFriends);
+      triggerNotification('Fatura marcada como paga localmente!');
+    } else {
+      // Online Supabase
+      try {
+        // Atualizar installments
+        const { error: instErr } = await supabase
+          .from('installments')
+          .update({ status: 'paid' })
+          .in('id', targetInstallmentIds);
+
+        if (instErr) throw instErr;
+
+        // Atualizar installment_friends
+        const { error: instFrErr } = await supabase
+          .from('installment_friends')
+          .update({ status: 'paid' })
+          .in('installment_id', targetInstallmentIds);
+
+        if (instFrErr) throw instFrErr;
+
+        await loadAllData();
+        triggerNotification('Fatura marcada como paga com sucesso!');
+      } catch (err: any) {
+        triggerNotification('Erro ao pagar fatura: ' + err.message, 'error');
       }
     }
   };
@@ -682,15 +808,19 @@ export default function App() {
       const newInstFriends: InstallmentFriend[] = [];
 
       if (selectedFriendsForDivision.length > 0) {
-        // Divisão igualitária incluindo o proprietário
-        const divisor = selectedFriendsForDivision.length + 1; // Amigos + Dono do cartão
+        const divisor = selectedFriendsForDivision.length;
+        const hasUser = selectedFriendsForDivision.includes('user');
+        const realFriendsSelected = selectedFriendsForDivision.filter(id => id !== 'user');
+
         newInsts.forEach(inst => {
           const splitAmount = parseFloat((inst.amount / divisor).toFixed(2));
-          selectedFriendsForDivision.forEach((friendId, fIdx) => {
-            // Ajuste na última faturação de centavos para divisão de amigos
-            const finalFriendAmount = fIdx === selectedFriendsForDivision.length - 1
-              ? parseFloat((inst.amount - (splitAmount * (divisor - 1)) + splitAmount).toFixed(2))
-              : splitAmount;
+          realFriendsSelected.forEach((friendId, fIdx) => {
+            let finalFriendAmount = splitAmount;
+            
+            // Se o dono não está na partilha, o último amigo selecionado absorve a diferença dos centavos
+            if (!hasUser && fIdx === realFriendsSelected.length - 1) {
+              finalFriendAmount = parseFloat((inst.amount - (splitAmount * (realFriendsSelected.length - 1))).toFixed(2));
+            }
 
             newInstFriends.push({
               id: `if-${inst.id}-${friendId}`,
@@ -759,15 +889,19 @@ export default function App() {
 
         // 3. Cadastra a divisão com amigos (se houver)
         if (selectedFriendsForDivision.length > 0 && iData) {
-          const divisor = selectedFriendsForDivision.length + 1;
+          const divisor = selectedFriendsForDivision.length;
+          const hasUser = selectedFriendsForDivision.includes('user');
+          const realFriendsSelected = selectedFriendsForDivision.filter(id => id !== 'user');
           const instFriendsToInsert: any[] = [];
 
           iData.forEach(inst => {
             const splitAmount = parseFloat((inst.amount / divisor).toFixed(2));
-            selectedFriendsForDivision.forEach((friendId, fIdx) => {
-              const finalFriendAmount = fIdx === selectedFriendsForDivision.length - 1
-                ? parseFloat((inst.amount - (splitAmount * (divisor - 1)) + splitAmount).toFixed(2))
-                : splitAmount;
+            realFriendsSelected.forEach((friendId, fIdx) => {
+              let finalFriendAmount = splitAmount;
+              
+              if (!hasUser && fIdx === realFriendsSelected.length - 1) {
+                finalFriendAmount = parseFloat((inst.amount - (splitAmount * (realFriendsSelected.length - 1))).toFixed(2));
+              }
 
               instFriendsToInsert.push({
                 installment_id: inst.id,
@@ -778,11 +912,13 @@ export default function App() {
             });
           });
 
-          const { error: ifError } = await supabase
-            .from('installment_friends')
-            .insert(instFriendsToInsert);
+          if (instFriendsToInsert.length > 0) {
+            const { error: ifError } = await supabase
+              .from('installment_friends')
+              .insert(instFriendsToInsert);
 
-          if (ifError) throw ifError;
+            if (ifError) throw ifError;
+          }
         }
 
         await loadAllData();
@@ -914,19 +1050,66 @@ export default function App() {
     });
   }, [purchases, cards]);
 
-  // Resumo de gastos por pessoa para o cartão selecionado no mês/ano atual
+  // Retorna para cada cardId o mês e ano da fatura pendente mais antiga
+  const cardActiveBillCycles = useMemo(() => {
+    const cycles: { [cardId: string]: { month: number; year: number } } = {};
+    
+    cards.forEach(card => {
+      // Filtra parcelas pendentes de compras deste cartão
+      const cardPurchases = purchases.filter(p => p.card_id === card.id);
+      const cardPurchaseIds = cardPurchases.map(p => p.id);
+      const cardPendingInstallments = installments.filter(inst => 
+        inst.status === 'pending' && cardPurchaseIds.includes(inst.purchase_id)
+      );
+      
+      if (cardPendingInstallments.length > 0) {
+        // Encontra a com data de vencimento mais antiga
+        let oldestInst = cardPendingInstallments[0];
+        cardPendingInstallments.forEach(inst => {
+          if (new Date(inst.due_date).getTime() < new Date(oldestInst.due_date).getTime()) {
+            oldestInst = inst;
+          }
+        });
+        
+        const parts = oldestInst.due_date.split('-');
+        cycles[card.id] = {
+          month: parseInt(parts[1], 10),
+          year: parseInt(parts[0], 10)
+        };
+      } else {
+        // Se não houver pendentes, assume o mês e ano de referência padrão (Junho 2026)
+        cycles[card.id] = {
+          month: 6,
+          year: 2026
+        };
+      }
+    });
+    
+    return cycles;
+  }, [cards, purchases, installments]);
+
+  // Resumo de gastos por pessoa para o cartão selecionado no ciclo ativo aberto
   const cardPersonGastos = useMemo(() => {
     if (!selectedCardId) return [];
+
+    const cycle = cardActiveBillCycles[selectedCardId] || { month: 6, year: 2026 };
+    const targetMonth = cycle.month;
+    const targetYear = cycle.year;
 
     // Filtra compras deste cartão
     const cardPurchases = purchases.filter(p => p.card_id === selectedCardId);
     const cardPurchaseIds = cardPurchases.map(p => p.id);
 
-    // Parcelas deste cartão no mês/ano atual
+    // Parcelas deste cartão no ciclo alvo
     const cardMonthInstallments = installments.filter(inst => {
       if (!cardPurchaseIds.includes(inst.purchase_id)) return false;
-      const date = new Date(inst.due_date + 'T12:00:00');
-      return date.getMonth() + 1 === selectedMonth && date.getFullYear() === selectedYear;
+      const parts = inst.due_date.split('-');
+      if (parts.length >= 2) {
+        const year = parseInt(parts[0], 10);
+        const month = parseInt(parts[1], 10);
+        return month === targetMonth && year === targetYear;
+      }
+      return false;
     });
 
     const personMap: { [name: string]: number } = {};
@@ -955,20 +1138,29 @@ export default function App() {
     });
 
     return Object.entries(personMap).map(([name, amount]) => ({ name, amount }));
-  }, [selectedCardId, purchases, installments, installmentFriends, friends, selectedMonth, selectedYear]);
+  }, [selectedCardId, purchases, installments, installmentFriends, friends, cardActiveBillCycles]);
 
-  // Histórico de parcelas da fatura do mês para o cartão selecionado
+  // Histórico de parcelas da fatura do mês ativo para o cartão selecionado
   const cardDetailedPurchases = useMemo(() => {
     if (!selectedCardId) return [];
+
+    const cycle = cardActiveBillCycles[selectedCardId] || { month: 6, year: 2026 };
+    const targetMonth = cycle.month;
+    const targetYear = cycle.year;
 
     const cardPurchases = purchases.filter(p => p.card_id === selectedCardId);
     const cardPurchaseIds = cardPurchases.map(p => p.id);
 
-    // Parcelas deste cartão no mês/ano atual
+    // Parcelas deste cartão no ciclo alvo
     const cardMonthInstallments = installments.filter(inst => {
       if (!cardPurchaseIds.includes(inst.purchase_id)) return false;
-      const date = new Date(inst.due_date + 'T12:00:00');
-      return date.getMonth() + 1 === selectedMonth && date.getFullYear() === selectedYear;
+      const parts = inst.due_date.split('-');
+      if (parts.length >= 2) {
+        const year = parseInt(parts[0], 10);
+        const month = parseInt(parts[1], 10);
+        return month === targetMonth && year === targetYear;
+      }
+      return false;
     });
 
     return cardMonthInstallments.map(inst => {
@@ -987,6 +1179,7 @@ export default function App() {
 
       return {
         id: inst.id,
+        purchaseId: purchase.id,
         description: purchase.description,
         purchaseDate: purchase.purchase_date,
         installmentNumber: inst.installment_number,
@@ -996,13 +1189,18 @@ export default function App() {
         category: purchase.category
       };
     }).filter(Boolean);
-  }, [selectedCardId, purchases, installments, installmentFriends, friends, selectedMonth, selectedYear]);
+  }, [selectedCardId, purchases, installments, installmentFriends, friends, cardActiveBillCycles]);
 
   // Parcelas do mês e ano selecionados
   const selectedMonthInstallments = useMemo(() => {
     return installments.filter(inst => {
-      const date = new Date(inst.due_date + 'T12:00:00');
-      return date.getMonth() + 1 === selectedMonth && date.getFullYear() === selectedYear;
+      const parts = inst.due_date.split('-');
+      if (parts.length >= 2) {
+        const year = parseInt(parts[0], 10);
+        const month = parseInt(parts[1], 10);
+        return month === selectedMonth && year === selectedYear;
+      }
+      return false;
     });
   }, [installments, selectedMonth, selectedYear]);
 
@@ -1519,6 +1717,7 @@ export default function App() {
 
                   const cardAvailableLimit = Math.max(0, card.limit - cardUsedLimit);
                   const selectedMonthTotalFatura = cardDetailedPurchases.reduce((acc, curr) => acc + (curr?.amount || 0), 0);
+                  const cardActiveCycle = cardActiveBillCycles[card.id] || { month: 6, year: 2026 };
 
                   return (
                     <div className="space-y-6 animate-slide-up">
@@ -1569,18 +1768,29 @@ export default function App() {
                       </div>
 
                       {/* Resumo da Fatura */}
-                      <div className="bg-card border border-border p-4.5 rounded-2xl flex justify-between items-center">
-                        <div>
-                          <span className="text-[10px] text-textMuted uppercase font-medium">
-                            Fatura de {['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'][selectedMonth - 1]}/{selectedYear}
+                      <div className="bg-card border border-border p-4.5 rounded-2xl">
+                        <div className="flex justify-between items-center">
+                          <div>
+                            <span className="text-[10px] text-textMuted uppercase font-medium">
+                              Fatura de {['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'][cardActiveCycle.month - 1]}/{cardActiveCycle.year}
+                            </span>
+                            <h4 className="text-2xl font-extrabold text-white mt-0.5">
+                              R$ {selectedMonthTotalFatura.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                            </h4>
+                          </div>
+                          <span className="text-[10px] bg-accent/10 border border-accent/20 text-accent font-bold px-3 py-1 rounded-full">
+                            {cardDetailedPurchases.length} {cardDetailedPurchases.length === 1 ? 'Lançamento' : 'Lançamentos'}
                           </span>
-                          <h4 className="text-2xl font-extrabold text-white mt-0.5">
-                            R$ {selectedMonthTotalFatura.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                          </h4>
                         </div>
-                        <span className="text-[10px] bg-accent/10 border border-accent/20 text-accent font-bold px-3 py-1 rounded-full">
-                          {cardDetailedPurchases.length} {cardDetailedPurchases.length === 1 ? 'Lançamento' : 'Lançamentos'}
-                        </span>
+                        {selectedMonthTotalFatura > 0 && (
+                          <button
+                            onClick={() => handlePayCardInvoice(card.id)}
+                            className="w-full mt-4 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold py-2.5 rounded-xl transition-all shadow-md shadow-emerald-500/20 flex items-center justify-center gap-1.5"
+                          >
+                            <CheckCircle2 className="w-4 h-4" />
+                            Marcar Fatura como Paga
+                          </button>
+                        )}
                       </div>
 
                       {/* SEÇÃO 1: RESUMO DE GASTOS POR PESSOA */}
@@ -1628,7 +1838,7 @@ export default function App() {
 
                         {cardDetailedPurchases.length === 0 ? (
                           <p className="text-xs text-textMuted text-center py-8 bg-card/30 border border-dashed border-border rounded-2xl">
-                            Nenhuma compra registrada para este cartão em {['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'][selectedMonth - 1]}/{selectedYear}.
+                            Nenhuma compra registrada para este cartão em {['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'][cardActiveCycle.month - 1]}/{cardActiveCycle.year}.
                           </p>
                         ) : (
                           <div className="space-y-2">
@@ -1647,13 +1857,22 @@ export default function App() {
                                       </span>
                                     </div>
                                   </div>
-                                  <div className="text-right">
-                                    <span className="text-xs font-extrabold text-white block">
-                                      R$ {compra.amount.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                                    </span>
-                                    <span className="text-[9px] text-textMuted font-semibold bg-zinc-900 px-1.5 py-0.5 rounded border border-border/60">
-                                      {compra.installmentNumber}/{compra.totalInstallments}
-                                    </span>
+                                  <div className="flex items-center gap-3">
+                                    <div className="text-right">
+                                      <span className="text-xs font-extrabold text-white block">
+                                        R$ {compra.amount.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                                      </span>
+                                      <span className="text-[9px] text-textMuted font-semibold bg-zinc-900 px-1.5 py-0.5 rounded border border-border/60">
+                                        {compra.installmentNumber}/{compra.totalInstallments}
+                                      </span>
+                                    </div>
+                                    <button
+                                      onClick={() => handleDeletePurchase(compra.purchaseId)}
+                                      className="p-1.5 text-textMuted hover:text-danger hover:bg-danger/10 rounded-lg transition-all"
+                                      title="Excluir Compra Inteira"
+                                    >
+                                      <Trash2 className="w-4 h-4" />
+                                    </button>
                                   </div>
                                 </div>
                               );
@@ -1684,7 +1903,9 @@ export default function App() {
                   {/* FORMULÁRIO ADICIONAR CARTÃO */}
                   {showAddCardForm && (
                     <form onSubmit={handleAddCard} className="bg-card border border-border p-5 rounded-2xl space-y-4 animate-slide-up">
-                      <h3 className="text-sm font-bold text-white">Cadastrar Novo Cartão</h3>
+                      <h3 className="text-sm font-bold text-white">
+                        {editingCardId ? 'Editar Cartão' : 'Cadastrar Novo Cartão'}
+                      </h3>
 
                       <div>
                         <label className="block text-[11px] text-textMuted font-medium mb-1">Nome do Cartão (ex: Nubank Visa)</label>
@@ -1757,11 +1978,11 @@ export default function App() {
                           type="submit"
                           className="flex-1 bg-accent hover:bg-accent-hover text-white text-xs font-semibold py-2.5 rounded-xl transition-all"
                         >
-                          Salvar Cartão
+                          {editingCardId ? 'Salvar Alterações' : 'Salvar Cartão'}
                         </button>
                         <button
                           type="button"
-                          onClick={() => setShowAddCardForm(false)}
+                          onClick={clearCardForm}
                           className="bg-zinc-800 hover:bg-zinc-700 text-textMuted text-xs font-semibold px-4 py-2.5 rounded-xl transition-all"
                         >
                           Cancelar
@@ -1849,13 +2070,22 @@ export default function App() {
                                   <div className="bg-white h-full" style={{ width: `${Math.min(100, percentage)}%` }}></div>
                                 </div>
                               </div>
-                              <button
-                                onClick={() => handleDeleteCard(card.id)}
-                                className="p-2 text-textMuted hover:text-danger hover:bg-danger/10 rounded-lg transition-all"
-                                title="Excluir Cartão"
-                              >
-                                <Trash2 className="w-4 h-4" />
-                              </button>
+                              <div className="flex gap-1">
+                                <button
+                                  onClick={() => startEditCard(card)}
+                                  className="p-2 text-textMuted hover:text-white hover:bg-white/10 rounded-lg transition-all"
+                                  title="Editar Cartão"
+                                >
+                                  <Edit className="w-4 h-4" />
+                                </button>
+                                <button
+                                  onClick={() => handleDeleteCard(card.id)}
+                                  className="p-2 text-textMuted hover:text-danger hover:bg-danger/10 rounded-lg transition-all"
+                                  title="Excluir Cartão"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              </div>
                             </div>
                           </div>
                         );
@@ -1933,39 +2163,201 @@ export default function App() {
                       .filter(ifriend => ifriend.friend_id === friend.id && ifriend.status === 'pending')
                       .reduce((acc, curr) => acc + curr.amount, 0);
 
+                    const isExpanded = expandedFriendId === friend.id;
+
+                    // Group installments of this friend by card in the card's active cycle
+                    const friendCardGroups = cards.map(card => {
+                      const cycle = cardActiveBillCycles[card.id] || { month: 6, year: 2026 };
+                      const cardPurchases = purchases.filter(p => p.card_id === card.id);
+                      const cardPurchaseIds = cardPurchases.map(p => p.id);
+                      
+                      const activeInstallments = installments.filter(inst => {
+                        if (!cardPurchaseIds.includes(inst.purchase_id)) return false;
+                        const parts = inst.due_date.split('-');
+                        if (parts.length >= 2) {
+                          const year = parseInt(parts[0], 10);
+                          const month = parseInt(parts[1], 10);
+                          return month === cycle.month && year === cycle.year;
+                        }
+                        return false;
+                      });
+                      
+                      const items = activeInstallments.map(inst => {
+                        const assigned = installmentFriends.find(fa => fa.friend_id === friend.id && fa.installment_id === inst.id);
+                        if (!assigned) return null;
+                        
+                        const purchase = cardPurchases.find(p => p.id === inst.purchase_id);
+                        
+                        return {
+                          instId: inst.id,
+                          purchaseDesc: purchase ? purchase.description : 'Compra',
+                          cardId: card.id,
+                          cardName: card.name,
+                          cardColor: card.color,
+                          installmentNumber: inst.installment_number,
+                          totalInstallments: purchase ? purchase.installments_count : 1,
+                          amount: assigned.amount,
+                          status: assigned.status,
+                          instFriendId: assigned.id,
+                          dueDate: inst.due_date
+                        };
+                      }).filter(Boolean) as Array<{
+                        instId: string;
+                        purchaseDesc: string;
+                        cardId: string;
+                        cardName: string;
+                        cardColor: string;
+                        installmentNumber: number;
+                        totalInstallments: number;
+                        amount: number;
+                        status: 'pending' | 'paid';
+                        instFriendId: string;
+                        dueDate: string;
+                      }>;
+                      
+                      if (items.length === 0) return null;
+                      
+                      const total = items.reduce((sum, item) => sum + item.amount, 0);
+                      const isCurrentBill = cycle.year < 2026 || (cycle.year === 2026 && cycle.month <= 6);
+                      const label = isCurrentBill ? 'Fatura Atual' : 'Próxima Fatura';
+                      
+                      return {
+                        cardId: card.id,
+                        cardName: card.name,
+                        cardColor: card.color,
+                        total,
+                        label,
+                        cycle,
+                        items
+                      };
+                    }).filter(Boolean) as Array<{
+                      cardId: string;
+                      cardName: string;
+                      cardColor: string;
+                      total: number;
+                      label: string;
+                      cycle: { month: number; year: number };
+                      items: Array<{
+                        instId: string;
+                        purchaseDesc: string;
+                        cardId: string;
+                        cardName: string;
+                        cardColor: string;
+                        installmentNumber: number;
+                        totalInstallments: number;
+                        amount: number;
+                        status: 'pending' | 'paid';
+                        instFriendId: string;
+                        dueDate: string;
+                      }>;
+                    }>;
+
                     return (
-                      <div key={friend.id} className="bg-card border border-border rounded-xl p-4 flex items-center justify-between card-hover-effect">
-                        <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-accent/20 to-purple-600/10 border border-accent/20 flex items-center justify-center font-bold text-accent">
-                            {friend.name.substring(0, 2).toUpperCase()}
+                      <div
+                        key={friend.id}
+                        onClick={() => setExpandedFriendId(isExpanded ? null : friend.id)}
+                        className={`bg-card border ${
+                          isExpanded ? 'border-accent/30 shadow-md shadow-accent/5' : 'border-border'
+                        } rounded-xl p-4 cursor-pointer hover:border-border-hover transition-all space-y-3.5`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-3">
+                            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-accent/20 to-purple-600/10 border border-accent/20 flex items-center justify-center font-bold text-accent">
+                              {friend.name.substring(0, 2).toUpperCase()}
+                            </div>
+                            <div>
+                              <h4 className="text-sm font-bold text-white">{friend.name}</h4>
+                              <span className="text-[10px] text-textMuted block">
+                                {totalPendingToReceive > 0
+                                  ? `Possui rateios pendentes`
+                                  : 'Sem pendências financeiras'}
+                              </span>
+                            </div>
                           </div>
-                          <div>
-                            <h4 className="text-sm font-bold text-white">{friend.name}</h4>
-                            <span className="text-[10px] text-textMuted">
-                              {totalPendingToReceive > 0
-                                ? `Possui rateios pendentes`
-                                : 'Sem pendências financeiras'}
-                            </span>
+                          <div className="flex items-center gap-3" onClick={(e) => e.stopPropagation()}>
+                            {totalPendingToReceive > 0 ? (
+                              <span className="text-xs font-bold text-accent bg-accent/10 px-2 py-1 rounded-lg">
+                                A receber: R$ {totalPendingToReceive.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                              </span>
+                            ) : (
+                              <span className="text-[10px] font-semibold text-success bg-success/10 px-2.5 py-1 rounded-full uppercase">
+                                Tá Pago
+                              </span>
+                            )}
+                            <button
+                              onClick={() => handleDeleteFriend(friend.id)}
+                              className="p-2 text-textMuted hover:text-danger hover:bg-danger/10 rounded-lg transition-all"
+                              title="Remover Amigo"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
                           </div>
                         </div>
-                        <div className="flex items-center gap-3">
-                          {totalPendingToReceive > 0 ? (
-                            <span className="text-xs font-bold text-accent bg-accent/10 px-2 py-1 rounded-lg">
-                              A receber: R$ {totalPendingToReceive.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                            </span>
-                          ) : (
-                            <span className="text-[10px] font-semibold text-success bg-success/10 px-2.5 py-1 rounded-full uppercase">
-                              Tá Pago
-                            </span>
-                          )}
-                          <button
-                            onClick={() => handleDeleteFriend(friend.id)}
-                            className="p-2 text-textMuted hover:text-danger hover:bg-danger/10 rounded-lg transition-all"
-                            title="Remover Amigo"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </div>
+
+                        {/* Conteúdo Expandido */}
+                        {isExpanded && (
+                          <div className="border-t border-border/50 pt-3.5 space-y-3" onClick={(e) => e.stopPropagation()}>
+                            {friendCardGroups.length === 0 ? (
+                              <p className="text-xs text-textMuted text-center py-2">
+                                Nenhuma parcela ativa para {friend.name} nos ciclos vigentes dos cartões.
+                              </p>
+                            ) : (
+                              <div className="space-y-3">
+                                <span className="text-[10px] text-textMuted font-bold uppercase tracking-wider block">
+                                  Dívidas Ativas por Cartão:
+                                </span>
+                                
+                                {friendCardGroups.map(group => (
+                                  <div key={group.cardId} className="bg-zinc-950/60 border border-border/80 rounded-xl p-3.5 space-y-2.5">
+                                    <div className="flex items-center justify-between border-b border-border/40 pb-2">
+                                      <div className="flex items-center gap-2">
+                                        <span className={`w-2.5 h-2.5 rounded-full bg-gradient-to-r ${group.cardColor}`}></span>
+                                        <span className="text-xs font-bold text-white">
+                                          {group.cardName}
+                                        </span>
+                                        <span className={`text-[9px] font-semibold px-2 py-0.5 rounded-full border ${
+                                          group.label === 'Fatura Atual'
+                                            ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
+                                            : 'bg-amber-500/10 border-amber-500/20 text-amber-400'
+                                        }`}>
+                                          {group.label} ({['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'][group.cycle.month - 1]}/{group.cycle.year})
+                                        </span>
+                                      </div>
+                                      <span className="text-xs font-extrabold text-accent">
+                                        Total: R$ {group.total.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                                      </span>
+                                    </div>
+                                    <div className="space-y-2">
+                                      {group.items.map(item => (
+                                        <div key={item.instId} className="flex justify-between items-center text-xs">
+                                          <div>
+                                            <span className="text-slate-300 font-medium block">{item.purchaseDesc}</span>
+                                            <span className="text-[9px] text-textMuted">Parcela {item.installmentNumber}/{item.totalInstallments}</span>
+                                          </div>
+                                          <div className="flex items-center gap-3">
+                                            <span className="font-bold text-white">
+                                              R$ {item.amount.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                                            </span>
+                                            <button
+                                              onClick={() => toggleFriendPaidStatus(item.instFriendId, item.status)}
+                                              className={`px-2 py-0.75 rounded-lg text-[9px] font-bold uppercase tracking-wider transition-all border ${
+                                                item.status === 'paid'
+                                                  ? 'bg-success/10 text-success border-success/30 hover:bg-success/20'
+                                                  : 'bg-accent/10 text-accent border-accent/25 hover:bg-accent/20'
+                                              }`}
+                                            >
+                                              {item.status === 'paid' ? 'Pago' : 'Pendente'}
+                                            </button>
+                                          </div>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
                     );
                   })}
@@ -2087,8 +2479,31 @@ export default function App() {
                     ) : (
                       <div className="bg-zinc-950 border border-border rounded-xl p-3 max-h-40 overflow-y-auto space-y-2">
                         <p className="text-[10px] text-textMuted pb-1 border-b border-border">
-                          O valor total (e cada parcela) será dividido igualmente entre você e os marcados abaixo:
+                          O valor total (e cada parcela) será dividido igualmente entre as pessoas marcadas abaixo:
                         </p>
+                        
+                        {/* Opção fixa para "Você" (o dono) */}
+                        <label
+                          className={`flex items-center justify-between p-2 rounded-lg cursor-pointer transition-all ${
+                            selectedFriendsForDivision.includes('user') ? 'bg-accent/10 border border-accent/20' : 'hover:bg-zinc-900 border border-transparent'
+                          }`}
+                        >
+                          <span className="text-xs font-medium text-white">Você (Dono do Cartão)</span>
+                          <input
+                            type="checkbox"
+                            checked={selectedFriendsForDivision.includes('user')}
+                            onChange={() => {
+                              if (selectedFriendsForDivision.includes('user')) {
+                                setSelectedFriendsForDivision(selectedFriendsForDivision.filter(id => id !== 'user'));
+                              } else {
+                                setSelectedFriendsForDivision([...selectedFriendsForDivision, 'user']);
+                              }
+                            }}
+                            className="w-4 h-4 text-accent border-border rounded focus:ring-accent bg-background"
+                          />
+                        </label>
+
+                        {/* Amigos cadastrados */}
                         {friends.map(friend => {
                           const isSelected = selectedFriendsForDivision.includes(friend.id);
                           return (
@@ -2127,8 +2542,8 @@ export default function App() {
                       </div>
                       {selectedFriendsForDivision.length > 0 && (
                         <div className="flex justify-between text-accent font-semibold text-[11px]">
-                          <span>Divisão ({selectedFriendsForDivision.length + 1} pessoas):</span>
-                          <span>R$ {(parseFloat(purchaseAmount) / (selectedFriendsForDivision.length + 1)).toLocaleString('pt-BR', { minimumFractionDigits: 2 })} por pessoa</span>
+                          <span>Divisão ({selectedFriendsForDivision.length} {selectedFriendsForDivision.length === 1 ? 'pessoa' : 'pessoas'}):</span>
+                          <span>R$ {(parseFloat(purchaseAmount) / selectedFriendsForDivision.length).toLocaleString('pt-BR', { minimumFractionDigits: 2 })} por pessoa</span>
                         </div>
                       )}
                     </div>
