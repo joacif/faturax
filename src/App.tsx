@@ -746,7 +746,7 @@ export default function App() {
     if (!selectedCard) return;
 
     // Gerar as parcelas e datas de vencimento com base no dia do vencimento do cartão
-    const generatedInstallmentsList: { installment_number: number; amount: number; due_date: string }[] = [];
+    const generatedInstallmentsList: { installment_number: number; amount: number; due_date: string; status: 'paid' | 'pending' }[] = [];
     const baseDate = new Date(purchaseDate + 'T12:00:00'); // Evita timezone offset
 
     const purchaseMonth = baseDate.getMonth();
@@ -774,10 +774,21 @@ export default function App() {
         ? parseFloat((amount - (instAmount * (instCount - 1))).toFixed(2))
         : instAmount;
 
+      const parts = formattedDate.split('-');
+      let status: 'paid' | 'pending' = 'pending';
+      if (parts.length >= 2) {
+        const year = parseInt(parts[0], 10);
+        const month = parseInt(parts[1], 10);
+        if (year < 2026 || (year === 2026 && month < 6)) {
+          status = 'paid';
+        }
+      }
+
       generatedInstallmentsList.push({
         installment_number: i,
         amount: finalAmount,
-        due_date: formattedDate
+        due_date: formattedDate,
+        status
       });
     }
 
@@ -802,7 +813,7 @@ export default function App() {
         installment_number: inst.installment_number,
         amount: inst.amount,
         due_date: inst.due_date,
-        status: 'pending'
+        status: inst.status
       }));
 
       const newInstFriends: InstallmentFriend[] = [];
@@ -827,7 +838,7 @@ export default function App() {
               installment_id: inst.id,
               friend_id: friendId,
               amount: finalFriendAmount,
-              status: 'pending'
+              status: inst.status
             });
           });
         });
@@ -877,7 +888,7 @@ export default function App() {
           installment_number: inst.installment_number,
           amount: inst.amount,
           due_date: inst.due_date,
-          status: 'pending'
+          status: inst.status
         }));
 
         const { data: iData, error: iError } = await supabase
@@ -907,7 +918,7 @@ export default function App() {
                 installment_id: inst.id,
                 friend_id: friendId,
                 amount: finalFriendAmount,
-                status: 'pending'
+                status: inst.status
               });
             });
           });
