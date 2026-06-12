@@ -2149,41 +2149,70 @@ export default function App() {
                 </form>
               )}
 
-              {/* LISTAGEM DE AMIGOS */}
-              {friends.length === 0 ? (
-                <div className="text-center py-12 bg-card/30 border border-dashed border-border rounded-3xl">
-                  <Users className="w-10 h-10 text-textMuted mx-auto mb-2 opacity-50" />
-                  <p className="text-sm text-textMuted">Nenhuma pessoa cadastrada ainda.</p>
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  {friends.map(friend => {
-                    // Calcula o valor total pendente que este amigo deve
-                    const totalPendingToReceive = installmentFriends
-                      .filter(ifriend => ifriend.friend_id === friend.id && ifriend.status === 'pending')
-                      .reduce((acc, curr) => acc + curr.amount, 0);
+              {/* LISTAGEM DE PESSOAS */}
+              <div className="space-y-2">
+                {[
+                  { id: 'owner_profile', name: 'Você', isOwner: true },
+                  ...friends.map(f => ({ id: f.id, name: f.name, isOwner: false }))
+                ].map(person => {
+                  // Calcula o valor total pendente que este amigo ou dono deve
+                  const totalPendingToReceive = person.isOwner
+                    ? installments
+                        .filter(inst => inst.status === 'pending')
+                        .reduce((acc, inst) => {
+                          const friendsAssigned = installmentFriends.filter(ifriend => ifriend.installment_id === inst.id);
+                          const friendsTotal = friendsAssigned.reduce((sum, curr) => sum + curr.amount, 0);
+                          const ownerShare = Math.max(0, inst.amount - friendsTotal);
+                          return acc + ownerShare;
+                        }, 0)
+                    : installmentFriends
+                        .filter(ifriend => ifriend.friend_id === person.id && ifriend.status === 'pending')
+                        .reduce((acc, curr) => acc + curr.amount, 0);
 
-                    const isExpanded = expandedFriendId === friend.id;
+                  const isExpanded = expandedFriendId === person.id;
 
-                    // Group installments of this friend by card in the card's active cycle
-                    const friendCardGroups = cards.map(card => {
-                      const cycle = cardActiveBillCycles[card.id] || { month: 6, year: 2026 };
-                      const cardPurchases = purchases.filter(p => p.card_id === card.id);
-                      const cardPurchaseIds = cardPurchases.map(p => p.id);
-                      
-                      const activeInstallments = installments.filter(inst => {
-                        if (!cardPurchaseIds.includes(inst.purchase_id)) return false;
-                        const parts = inst.due_date.split('-');
-                        if (parts.length >= 2) {
-                          const year = parseInt(parts[0], 10);
-                          const month = parseInt(parts[1], 10);
-                          return month === cycle.month && year === cycle.year;
-                        }
-                        return false;
-                      });
-                      
-                      const items = activeInstallments.map(inst => {
-                        const assigned = installmentFriends.find(fa => fa.friend_id === friend.id && fa.installment_id === inst.id);
+                  // Group installments of this person by card in the card's active cycle
+                  const friendCardGroups = cards.map(card => {
+                    const cycle = cardActiveBillCycles[card.id] || { month: 6, year: 2026 };
+                    const cardPurchases = purchases.filter(p => p.card_id === card.id);
+                    const cardPurchaseIds = cardPurchases.map(p => p.id);
+                    
+                    const activeInstallments = installments.filter(inst => {
+                      if (!cardPurchaseIds.includes(inst.purchase_id)) return false;
+                      const parts = inst.due_date.split('-');
+                      if (parts.length >= 2) {
+                        const year = parseInt(parts[0], 10);
+                        const month = parseInt(parts[1], 10);
+                        return month === cycle.month && year === cycle.year;
+                      }
+                      return false;
+                    });
+                    
+                    const items = activeInstallments.map(inst => {
+                      if (person.isOwner) {
+                        const friendsAssigned = installmentFriends.filter(fa => fa.installment_id === inst.id);
+                        const friendsTotal = friendsAssigned.reduce((sum, curr) => sum + curr.amount, 0);
+                        const ownerShare = Math.max(0, inst.amount - friendsTotal);
+                        
+                        if (ownerShare <= 0) return null;
+                        
+                        const purchase = cardPurchases.find(p => p.id === inst.purchase_id);
+                        
+                        return {
+                          instId: inst.id,
+                          purchaseDesc: purchase ? purchase.description : 'Compra',
+                          cardId: card.id,
+                          cardName: card.name,
+                          cardColor: card.color,
+                          installmentNumber: inst.installment_number,
+                          totalInstallments: purchase ? purchase.installments_count : 1,
+                          amount: ownerShare,
+                          status: inst.status,
+                          instFriendId: inst.id,
+                          dueDate: inst.due_date
+                        };
+                      } else {
+                        const assigned = installmentFriends.find(fa => fa.friend_id === person.id && fa.installment_id === inst.id);
                         if (!assigned) return null;
                         
                         const purchase = cardPurchases.find(p => p.id === inst.purchase_id);
@@ -2201,168 +2230,178 @@ export default function App() {
                           instFriendId: assigned.id,
                           dueDate: inst.due_date
                         };
-                      }).filter(Boolean) as Array<{
-                        instId: string;
-                        purchaseDesc: string;
-                        cardId: string;
-                        cardName: string;
-                        cardColor: string;
-                        installmentNumber: number;
-                        totalInstallments: number;
-                        amount: number;
-                        status: 'pending' | 'paid';
-                        instFriendId: string;
-                        dueDate: string;
-                      }>;
-                      
-                      if (items.length === 0) return null;
-                      
-                      const total = items.reduce((sum, item) => sum + item.amount, 0);
-                      const isCurrentBill = cycle.year < 2026 || (cycle.year === 2026 && cycle.month <= 6);
-                      const label = isCurrentBill ? 'Fatura Atual' : 'Próxima Fatura';
-                      
-                      return {
-                        cardId: card.id,
-                        cardName: card.name,
-                        cardColor: card.color,
-                        total,
-                        label,
-                        cycle,
-                        items
-                      };
+                      }
                     }).filter(Boolean) as Array<{
+                      instId: string;
+                      purchaseDesc: string;
                       cardId: string;
                       cardName: string;
                       cardColor: string;
-                      total: number;
-                      label: string;
-                      cycle: { month: number; year: number };
-                      items: Array<{
-                        instId: string;
-                        purchaseDesc: string;
-                        cardId: string;
-                        cardName: string;
-                        cardColor: string;
-                        installmentNumber: number;
-                        totalInstallments: number;
-                        amount: number;
-                        status: 'pending' | 'paid';
-                        instFriendId: string;
-                        dueDate: string;
-                      }>;
+                      installmentNumber: number;
+                      totalInstallments: number;
+                      amount: number;
+                      status: 'pending' | 'paid';
+                      instFriendId: string;
+                      dueDate: string;
                     }>;
+                    
+                    if (items.length === 0) return null;
+                    
+                    const total = items.reduce((sum, item) => sum + item.amount, 0);
+                    const isCurrentBill = cycle.year < 2026 || (cycle.year === 2026 && cycle.month <= 6);
+                    const label = isCurrentBill ? 'Fatura Atual' : 'Próxima Fatura';
+                    
+                    return {
+                      cardId: card.id,
+                      cardName: card.name,
+                      cardColor: card.color,
+                      total,
+                      label,
+                      cycle,
+                      items
+                    };
+                  }).filter(Boolean) as Array<{
+                    cardId: string;
+                    cardName: string;
+                    cardColor: string;
+                    total: number;
+                    label: string;
+                    cycle: { month: number; year: number };
+                    items: Array<{
+                      instId: string;
+                      purchaseDesc: string;
+                      cardId: string;
+                      cardName: string;
+                      cardColor: string;
+                      installmentNumber: number;
+                      totalInstallments: number;
+                      amount: number;
+                      status: 'pending' | 'paid';
+                      instFriendId: string;
+                      dueDate: string;
+                    }>;
+                  }>;
 
-                    return (
-                      <div
-                        key={friend.id}
-                        onClick={() => setExpandedFriendId(isExpanded ? null : friend.id)}
-                        className={`bg-card border ${
-                          isExpanded ? 'border-accent/30 shadow-md shadow-accent/5' : 'border-border'
-                        } rounded-xl p-4 cursor-pointer hover:border-border-hover transition-all space-y-3.5`}
-                      >
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-3">
-                            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-accent/20 to-purple-600/10 border border-accent/20 flex items-center justify-center font-bold text-accent">
-                              {friend.name.substring(0, 2).toUpperCase()}
-                            </div>
-                            <div>
-                              <h4 className="text-sm font-bold text-white">{friend.name}</h4>
-                              <span className="text-[10px] text-textMuted block">
-                                {totalPendingToReceive > 0
-                                  ? `Possui rateios pendentes`
-                                  : 'Sem pendências financeiras'}
-                              </span>
-                            </div>
+                  return (
+                    <div
+                      key={person.id}
+                      onClick={() => setExpandedFriendId(isExpanded ? null : person.id)}
+                      className={`bg-card border ${
+                        isExpanded ? 'border-accent/30 shadow-md shadow-accent/5' : 'border-border'
+                      } rounded-xl p-4 cursor-pointer hover:border-border-hover transition-all space-y-3.5`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-accent/20 to-purple-600/10 border border-accent/20 flex items-center justify-center font-bold text-accent">
+                            {person.name.substring(0, 2).toUpperCase()}
                           </div>
-                          <div className="flex items-center gap-3" onClick={(e) => e.stopPropagation()}>
-                            {totalPendingToReceive > 0 ? (
-                              <span className="text-xs font-bold text-accent bg-accent/10 px-2 py-1 rounded-lg">
-                                A receber: R$ {totalPendingToReceive.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                              </span>
-                            ) : (
-                              <span className="text-[10px] font-semibold text-success bg-success/10 px-2.5 py-1 rounded-full uppercase">
-                                Tá Pago
-                              </span>
-                            )}
+                          <div>
+                            <h4 className="text-sm font-bold text-white">{person.name}</h4>
+                            <span className="text-[10px] text-textMuted block">
+                              {totalPendingToReceive > 0
+                                ? person.isOwner 
+                                  ? `Possui despesas individuais`
+                                  : `Possui rateios pendentes`
+                                : 'Sem pendências financeiras'}
+                            </span>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-3" onClick={(e) => e.stopPropagation()}>
+                          {totalPendingToReceive > 0 ? (
+                            <span className="text-xs font-bold text-accent bg-accent/10 px-2 py-1 rounded-lg">
+                              {person.isOwner ? 'A pagar: ' : 'A receber: '}R$ {totalPendingToReceive.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                            </span>
+                          ) : (
+                            <span className="text-[10px] font-semibold text-success bg-success/10 px-2.5 py-1 rounded-full uppercase">
+                              Tá Pago
+                            </span>
+                          )}
+                          {!person.isOwner && (
                             <button
-                              onClick={() => handleDeleteFriend(friend.id)}
+                              onClick={() => handleDeleteFriend(person.id)}
                               className="p-2 text-textMuted hover:text-danger hover:bg-danger/10 rounded-lg transition-all"
                               title="Remover Amigo"
                             >
                               <Trash2 className="w-4 h-4" />
                             </button>
-                          </div>
+                          )}
                         </div>
+                      </div>
 
-                        {/* Conteúdo Expandido */}
-                        {isExpanded && (
-                          <div className="border-t border-border/50 pt-3.5 space-y-3" onClick={(e) => e.stopPropagation()}>
-                            {friendCardGroups.length === 0 ? (
-                              <p className="text-xs text-textMuted text-center py-2">
-                                Nenhuma parcela ativa para {friend.name} nos ciclos vigentes dos cartões.
-                              </p>
-                            ) : (
-                              <div className="space-y-3">
-                                <span className="text-[10px] text-textMuted font-bold uppercase tracking-wider block">
-                                  Dívidas Ativas por Cartão:
-                                </span>
-                                
-                                {friendCardGroups.map(group => (
-                                  <div key={group.cardId} className="bg-zinc-950/60 border border-border/80 rounded-xl p-3.5 space-y-2.5">
-                                    <div className="flex items-center justify-between border-b border-border/40 pb-2">
-                                      <div className="flex items-center gap-2">
-                                        <span className={`w-2.5 h-2.5 rounded-full bg-gradient-to-r ${group.cardColor}`}></span>
-                                        <span className="text-xs font-bold text-white">
-                                          {group.cardName}
-                                        </span>
-                                        <span className={`text-[9px] font-semibold px-2 py-0.5 rounded-full border ${
-                                          group.label === 'Fatura Atual'
-                                            ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
-                                            : 'bg-amber-500/10 border-amber-500/20 text-amber-400'
-                                        }`}>
-                                          {group.label} ({['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'][group.cycle.month - 1]}/{group.cycle.year})
-                                        </span>
-                                      </div>
-                                      <span className="text-xs font-extrabold text-accent">
-                                        Total: R$ {group.total.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                      {/* Conteúdo Expandido */}
+                      {isExpanded && (
+                        <div className="border-t border-border/50 pt-3.5 space-y-3" onClick={(e) => e.stopPropagation()}>
+                          {friendCardGroups.length === 0 ? (
+                            <p className="text-xs text-textMuted text-center py-2">
+                              Nenhuma parcela ativa para {person.name} nos ciclos vigentes dos cartões.
+                            </p>
+                          ) : (
+                            <div className="space-y-3">
+                              <span className="text-[10px] text-textMuted font-bold uppercase tracking-wider block">
+                                Dívidas Ativas por Cartão:
+                              </span>
+                              
+                              {friendCardGroups.map(group => (
+                                <div key={group.cardId} className="bg-zinc-950/60 border border-border/80 rounded-xl p-3.5 space-y-2.5">
+                                  <div className="flex items-center justify-between border-b border-border/40 pb-2">
+                                    <div className="flex items-center gap-2">
+                                      <span className={`w-2.5 h-2.5 rounded-full bg-gradient-to-r ${group.cardColor}`}></span>
+                                      <span className="text-xs font-bold text-white">
+                                        {group.cardName}
+                                      </span>
+                                      <span className={`text-[9px] font-semibold px-2 py-0.5 rounded-full border ${
+                                        group.label === 'Fatura Atual'
+                                          ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
+                                          : 'bg-amber-500/10 border-amber-500/20 text-amber-400'
+                                      }`}>
+                                        {group.label} ({['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'][group.cycle.month - 1]}/{group.cycle.year})
                                       </span>
                                     </div>
-                                    <div className="space-y-2">
-                                      {group.items.map(item => (
-                                        <div key={item.instId} className="flex justify-between items-center text-xs">
-                                          <div>
-                                            <span className="text-slate-300 font-medium block">{item.purchaseDesc}</span>
-                                            <span className="text-[9px] text-textMuted">Parcela {item.installmentNumber}/{item.totalInstallments}</span>
-                                          </div>
-                                          <div className="flex items-center gap-3">
-                                            <span className="font-bold text-white">
-                                              R$ {item.amount.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                                            </span>
-                                            <button
-                                              onClick={() => toggleFriendPaidStatus(item.instFriendId, item.status)}
-                                              className={`px-2 py-0.75 rounded-lg text-[9px] font-bold uppercase tracking-wider transition-all border ${
-                                                item.status === 'paid'
-                                                  ? 'bg-success/10 text-success border-success/30 hover:bg-success/20'
-                                                  : 'bg-accent/10 text-accent border-accent/25 hover:bg-accent/20'
-                                              }`}
-                                            >
-                                              {item.status === 'paid' ? 'Pago' : 'Pendente'}
-                                            </button>
-                                          </div>
-                                        </div>
-                                      ))}
-                                    </div>
+                                    <span className="text-xs font-extrabold text-accent">
+                                      Total: R$ {group.total.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                                    </span>
                                   </div>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
+                                  <div className="space-y-2">
+                                    {group.items.map(item => (
+                                      <div key={item.instId} className="flex justify-between items-center text-xs">
+                                        <div>
+                                          <span className="text-slate-300 font-medium block">{item.purchaseDesc}</span>
+                                          <span className="text-[9px] text-textMuted">Parcela {item.installmentNumber}/{item.totalInstallments}</span>
+                                        </div>
+                                        <div className="flex items-center gap-3">
+                                          <span className="font-bold text-white">
+                                            R$ {item.amount.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                                          </span>
+                                          <button
+                                            onClick={() => {
+                                              if (person.isOwner) {
+                                                toggleInstallmentStatus(item.instId, item.status);
+                                              } else {
+                                                toggleFriendPaidStatus(item.instFriendId, item.status);
+                                              }
+                                            }}
+                                            className={`px-2 py-0.75 rounded-lg text-[9px] font-bold uppercase tracking-wider transition-all border ${
+                                              item.status === 'paid'
+                                                ? 'bg-success/10 text-success border-success/30 hover:bg-success/20'
+                                                : 'bg-accent/10 text-accent border-accent/25 hover:bg-accent/20'
+                                            }`}
+                                          >
+                                            {item.status === 'paid' ? 'Pago' : 'Pendente'}
+                                          </button>
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           )}
 
