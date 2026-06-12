@@ -110,6 +110,16 @@ const generateInitialInstallmentFriends = (): InstallmentFriend[] => {
   return instFriends;
 };
 
+// Helpers para compras recorrentes
+const isPurchaseRecurrent = (purchase: Purchase): boolean => {
+  return (purchase as any).is_recurrent === true || !!(purchase.description && purchase.description.includes('[Recorrente]'));
+};
+
+const cleanPurchaseDescription = (desc: string): string => {
+  if (!desc) return '';
+  return desc.replace(' [Recorrente]', '');
+};
+
 export default function App() {
   // Estado de Autenticação
   const [session, setSession] = useState<{ user: { id: string; email: string } } | null>(null);
@@ -144,6 +154,7 @@ export default function App() {
   // Controle de Mês/Ano selecionado no Relatório
   const [selectedMonth, setSelectedMonth] = useState<number>(6); // Junho
   const [selectedYear, setSelectedYear] = useState<number>(2026);
+  const [selectedReportCardId, setSelectedReportCardId] = useState<string>('all');
 
   // Estados dos Formulários
   const [showAddCardForm, setShowAddCardForm] = useState(false);
@@ -165,6 +176,7 @@ export default function App() {
   const [purchaseCategory, setPurchaseCategory] = useState('Geral');
   const [purchaseDate, setPurchaseDate] = useState(new Date().toISOString().split('T')[0]);
   const [selectedFriendsForDivision, setSelectedFriendsForDivision] = useState<string[]>([]);
+  const [purchaseIsRecurrent, setPurchaseIsRecurrent] = useState(false);
 
   // Alertas
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
@@ -741,7 +753,7 @@ export default function App() {
     }
 
     const amount = parseFloat(purchaseAmount);
-    const instCount = parseInt(purchaseInstallments);
+    const instCount = purchaseIsRecurrent ? 60 : parseInt(purchaseInstallments);
     const selectedCard = cards.find(c => c.id === purchaseCard);
     if (!selectedCard) return;
 
@@ -799,12 +811,13 @@ export default function App() {
         id: purchaseId,
         user_id: 'guest',
         card_id: purchaseCard,
-        description: purchaseDesc,
+        description: purchaseIsRecurrent ? purchaseDesc + ' [Recorrente]' : purchaseDesc,
         total_amount: amount,
         installments_count: instCount,
         purchase_date: purchaseDate,
         category: purchaseCategory,
-        friend_ids: selectedFriendsForDivision
+        friend_ids: selectedFriendsForDivision,
+        is_recurrent: purchaseIsRecurrent
       };
 
       const newInsts: Installment[] = generatedInstallmentsList.map((inst, index) => ({
@@ -865,22 +878,35 @@ export default function App() {
           return;
         }
 
-        // 1. Cadastra a Compra com user_id explicitamente
-        const { data: pData, error: pError } = await supabase!
+        // 1. Cadastra a Compra com user_id e is_recurrent
+        let insertData: any = {
+          card_id: purchaseCard,
+          description: purchaseIsRecurrent ? purchaseDesc + ' [Recorrente]' : purchaseDesc,
+          total_amount: amount,
+          installments_count: instCount,
+          purchase_date: purchaseDate,
+          category: purchaseCategory,
+          user_id: user.id,
+          is_recurrent: purchaseIsRecurrent
+        };
+
+        let { data: pData, error: pError } = await supabase!
           .from('purchases')
-          .insert([{
-            card_id: purchaseCard,
-            description: purchaseDesc,
-            total_amount: amount,
-            installments_count: instCount,
-            purchase_date: purchaseDate,
-            category: purchaseCategory,
-            user_id: user.id
-          }])
+          .insert([insertData])
           .select();
 
-        if (pError) throw pError;
-        const purchase = pData[0];
+        if (pError) {
+          // Fallback se a coluna não existir no banco do Supabase ou outro erro relacionado
+          const { is_recurrent, ...fallbackData } = insertData;
+          const res = await supabase!
+            .from('purchases')
+            .insert([fallbackData])
+            .select();
+          if (res.error) throw res.error;
+          pData = res.data;
+        }
+
+        const purchase = pData![0];
 
         // 2. Cadastra as parcelas
         const installmentsToInsert = generatedInstallmentsList.map(inst => ({
@@ -945,6 +971,7 @@ export default function App() {
     setPurchaseInstallments('1');
     setSelectedFriendsForDivision([]);
     setPurchaseCategory('Geral');
+    setPurchaseIsRecurrent(false);
     setActiveTab('home'); // Redireciona para o início
   };
 
@@ -973,6 +1000,59 @@ export default function App() {
         triggerNotification('Compra excluída.');
       } catch (err: any) {
         triggerNotification('Erro ao excluir: ' + err.message, 'error');
+      }
+    }
+  };
+
+  const handleDeactivateRecurrence = async (purchaseId: string) => {
+    const purchase = purchases.find(p => p.id === purchaseId);
+    if (!purchase) return;
+
+    if (!confirm('Deseja realmente desativar esta recorrência? Todas as parcelas futuras além da fatura aberta atual serão excluídas.')) return;
+
+    // Achar o ciclo ativo do cartão desta compra
+    const cycle = cardActiveBillCycles[purchase.card_id] || { month: 6, year: 2026 };
+
+    // Filtrar parcelas desta compra que estão estritamente depois da fatura aberta atual
+    const targetInstallments = installments.filter(inst => {
+      if (inst.purchase_id !== purchaseId) return false;
+      const parts = inst.due_date.split('-');
+      if (parts.length >= 2) {
+        const year = parseInt(parts[0], 10);
+        const month = parseInt(parts[1], 10);
+        return year > cycle.year || (year === cycle.year && month > cycle.month);
+      }
+      return false;
+    });
+
+    const targetInstallmentIds = targetInstallments.map(i => i.id);
+
+    if (isGuest || !supabase) {
+      // Offline
+      const updatedInstallments = installments.filter(inst => !targetInstallmentIds.includes(inst.id));
+      const updatedInstFriends = installmentFriends.filter(ifriend => !targetInstallmentIds.includes(ifriend.installment_id));
+      
+      setInstallments(updatedInstallments);
+      setInstallmentFriends(updatedInstFriends);
+
+      saveOfflineData('installments', updatedInstallments);
+      saveOfflineData('inst_friends', updatedInstFriends);
+      triggerNotification('Recorrência desativada localmente!');
+    } else {
+      // Online
+      try {
+        if (targetInstallmentIds.length > 0) {
+          const { error } = await supabase
+            .from('installments')
+            .delete()
+            .in('id', targetInstallmentIds);
+          if (error) throw error;
+        }
+
+        await loadAllData();
+        triggerNotification('Recorrência desativada com sucesso!');
+      } catch (err: any) {
+        triggerNotification('Erro ao desativar recorrência: ' + err.message, 'error');
       }
     }
   };
@@ -1053,10 +1133,14 @@ export default function App() {
   const purchasesWithDetails = useMemo(() => {
     return purchases.map(p => {
       const card = cards.find(c => c.id === p.card_id);
+      const isRecurrent = isPurchaseRecurrent(p);
+      const cleanDesc = cleanPurchaseDescription(p.description);
       return {
         ...p,
+        description: cleanDesc,
         cardName: card ? card.name : 'Cartão Excluído',
-        cardColor: card ? card.color : 'from-gray-600 to-gray-800'
+        cardColor: card ? card.color : 'from-gray-600 to-gray-800',
+        isRecurrent
       };
     });
   }, [purchases, cards]);
@@ -1188,16 +1272,20 @@ export default function App() {
         ownerNames = `Dividido com ${friendNames}`;
       }
 
+      const isRecurrent = isPurchaseRecurrent(purchase);
+      const cleanDesc = cleanPurchaseDescription(purchase.description);
+
       return {
         id: inst.id,
         purchaseId: purchase.id,
-        description: purchase.description,
+        description: cleanDesc,
         purchaseDate: purchase.purchase_date,
         installmentNumber: inst.installment_number,
         totalInstallments: purchase.installments_count,
         amount: inst.amount,
         owners: ownerNames,
-        category: purchase.category
+        category: purchase.category,
+        isRecurrent
       };
     }).filter(Boolean);
   }, [selectedCardId, purchases, installments, installmentFriends, friends, cardActiveBillCycles]);
@@ -1209,11 +1297,43 @@ export default function App() {
       if (parts.length >= 2) {
         const year = parseInt(parts[0], 10);
         const month = parseInt(parts[1], 10);
-        return month === selectedMonth && year === selectedYear;
+        const matchesMonth = month === selectedMonth && year === selectedYear;
+        if (!matchesMonth) return false;
+
+        if (selectedReportCardId && selectedReportCardId !== 'all') {
+          const purchase = purchases.find(p => p.id === inst.purchase_id);
+          return purchase?.card_id === selectedReportCardId;
+        }
+        return true;
       }
       return false;
     });
-  }, [installments, selectedMonth, selectedYear]);
+  }, [installments, selectedMonth, selectedYear, selectedReportCardId, purchases]);
+
+  // Limite estimado do cartão selecionado no mês escolhido
+  const estimatedReportCardLimit = useMemo(() => {
+    if (!selectedReportCardId || selectedReportCardId === 'all') return null;
+    const card = cards.find(c => c.id === selectedReportCardId);
+    if (!card) return null;
+
+    const futurePendingTotal = installments
+      .filter(inst => {
+        if (inst.status !== 'pending') return false;
+        const purchase = purchases.find(p => p.id === inst.purchase_id);
+        if (purchase?.card_id !== card.id) return false;
+
+        const parts = inst.due_date.split('-');
+        if (parts.length >= 2) {
+          const year = parseInt(parts[0], 10);
+          const month = parseInt(parts[1], 10);
+          return year > selectedYear || (year === selectedYear && month >= selectedMonth);
+        }
+        return false;
+      })
+      .reduce((sum, inst) => sum + inst.amount, 0);
+
+    return Math.max(0, card.limit - futurePendingTotal);
+  }, [cards, selectedReportCardId, installments, purchases, selectedMonth, selectedYear]);
 
   // Detalhes completos das parcelas do mês atual (Incluindo descrição da compra, cartão, etc.)
   const enrichedMonthInstallments = useMemo(() => {
@@ -1226,9 +1346,12 @@ export default function App() {
       const friendsTotal = friendsAssigned.reduce((acc, curr) => acc + curr.amount, 0);
       const ownerShare = Math.max(0, inst.amount - friendsTotal);
 
+      const isRecurrent = purchase ? isPurchaseRecurrent(purchase) : false;
+      const purchaseDesc = purchase ? cleanPurchaseDescription(purchase.description) : 'Compra Excluída';
+
       return {
         ...inst,
-        purchaseDesc: purchase ? purchase.description : 'Compra Excluída',
+        purchaseDesc,
         category: purchase ? purchase.category : 'Outros',
         totalInstallments: purchase ? purchase.installments_count : 1,
         cardName: card ? card.name : 'Desconhecido',
@@ -1236,10 +1359,35 @@ export default function App() {
         cardId: card ? card.id : '',
         friendsAssigned,
         ownerShare,
-        friendsTotal
+        friendsTotal,
+        isRecurrent
       };
     });
   }, [selectedMonthInstallments, purchases, cards, installmentFriends]);
+
+  // Rateio consolidado de quanto cada pessoa (amigos e Você) representa no mês/cartão selecionado
+  const reportsPersonShares = useMemo(() => {
+    const shares: { name: string; amount: number; isOwner: boolean }[] = [];
+
+    // Amigos
+    friends.forEach(f => {
+      const totalFriend = enrichedMonthInstallments.reduce((acc, inst) => {
+        const assigned = inst.friendsAssigned.find(fa => fa.friend_id === f.id);
+        return acc + (assigned ? assigned.amount : 0);
+      }, 0);
+      if (totalFriend > 0) {
+        shares.push({ name: f.name, amount: totalFriend, isOwner: false });
+      }
+    });
+
+    // Você
+    const totalOwner = enrichedMonthInstallments.reduce((acc, inst) => acc + inst.ownerShare, 0);
+    if (totalOwner > 0) {
+      shares.push({ name: 'Você', amount: totalOwner, isOwner: true });
+    }
+
+    return shares;
+  }, [friends, enrichedMonthInstallments]);
 
   // Total acumulado de gastos na fatura do mês (Soma das parcelas que vencem neste mês)
   const totalFaturasMese = useMemo(() => {
@@ -1334,15 +1482,35 @@ export default function App() {
       .map(inst => {
         const purchase = purchases.find(p => p.id === inst.purchase_id);
         const card = purchase ? cards.find(c => c.id === purchase.card_id) : null;
+        const isRecurrent = purchase ? isPurchaseRecurrent(purchase) : false;
+        const desc = purchase ? cleanPurchaseDescription(purchase.description) : 'Compra';
         return {
           ...inst,
-          desc: purchase ? purchase.description : 'Compra',
+          desc,
           cardName: card ? card.name : 'Cartão',
-          cardColor: card ? card.color : 'from-gray-700 to-gray-900'
+          cardColor: card ? card.color : 'from-gray-700 to-gray-900',
+          isRecurrent
         };
       })
       .sort((a, b) => new Date(a.due_date).getTime() - new Date(b.due_date).getTime());
   }, [installments, purchases, cards]);
+
+  // Helper para verificar se uma compra tem parcelas futuras remanescentes além do ciclo ativo de seu cartão
+  const hasFutureInstallments = (purchaseId: string) => {
+    const purchase = purchases.find(p => p.id === purchaseId);
+    if (!purchase) return false;
+    const cycle = cardActiveBillCycles[purchase.card_id] || { month: 6, year: 2026 };
+    return installments.some(inst => {
+      if (inst.purchase_id !== purchaseId) return false;
+      const parts = inst.due_date.split('-');
+      if (parts.length >= 2) {
+        const year = parseInt(parts[0], 10);
+        const month = parseInt(parts[1], 10);
+        return year > cycle.year || (year === cycle.year && month > cycle.month);
+      }
+      return false;
+    });
+  };
 
 
   // RENDERIZAÇÃO DE TELAS
@@ -1685,7 +1853,7 @@ export default function App() {
                             <span className="text-xs font-bold text-white block">{bill.desc}</span>
                             <span className="text-[10px] text-textMuted flex items-center gap-1">
                               <span className={`w-2 h-2 rounded-full bg-gradient-to-r ${bill.cardColor}`}></span>
-                              {bill.cardName} • Parc. {bill.installment_number}
+                              {bill.cardName} • {bill.isRecurrent ? 'Recorrente' : `Parc. ${bill.installment_number}`}
                             </span>
                           </div>
                         </div>
@@ -1874,9 +2042,18 @@ export default function App() {
                                         R$ {compra.amount.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                                       </span>
                                       <span className="text-[9px] text-textMuted font-semibold bg-zinc-900 px-1.5 py-0.5 rounded border border-border/60">
-                                        {compra.installmentNumber}/{compra.totalInstallments}
+                                        {compra.isRecurrent ? 'Recorrente' : `${compra.installmentNumber}/${compra.totalInstallments}`}
                                       </span>
                                     </div>
+                                    {compra.isRecurrent && hasFutureInstallments(compra.purchaseId) && (
+                                      <button
+                                        onClick={() => handleDeactivateRecurrence(compra.purchaseId)}
+                                        className="p-1.5 text-amber-500 hover:text-amber-400 hover:bg-amber-500/10 rounded-lg transition-all"
+                                        title="Desativar Recorrência"
+                                      >
+                                        <AlertCircle className="w-4 h-4" />
+                                      </button>
+                                    )}
                                     <button
                                       onClick={() => handleDeletePurchase(compra.purchaseId)}
                                       className="p-1.5 text-textMuted hover:text-danger hover:bg-danger/10 rounded-lg transition-all"
@@ -2208,10 +2385,13 @@ export default function App() {
                         if (ownerShare <= 0) return null;
                         
                         const purchase = cardPurchases.find(p => p.id === inst.purchase_id);
+                        const isRecurrent = purchase ? isPurchaseRecurrent(purchase) : false;
+                        const purchaseDesc = purchase ? cleanPurchaseDescription(purchase.description) : 'Compra';
                         
                         return {
                           instId: inst.id,
-                          purchaseDesc: purchase ? purchase.description : 'Compra',
+                          purchaseId: purchase ? purchase.id : '',
+                          purchaseDesc,
                           cardId: card.id,
                           cardName: card.name,
                           cardColor: card.color,
@@ -2220,17 +2400,21 @@ export default function App() {
                           amount: ownerShare,
                           status: inst.status,
                           instFriendId: inst.id,
-                          dueDate: inst.due_date
+                          dueDate: inst.due_date,
+                          isRecurrent
                         };
                       } else {
                         const assigned = installmentFriends.find(fa => fa.friend_id === person.id && fa.installment_id === inst.id);
                         if (!assigned) return null;
                         
                         const purchase = cardPurchases.find(p => p.id === inst.purchase_id);
+                        const isRecurrent = purchase ? isPurchaseRecurrent(purchase) : false;
+                        const purchaseDesc = purchase ? cleanPurchaseDescription(purchase.description) : 'Compra';
                         
                         return {
                           instId: inst.id,
-                          purchaseDesc: purchase ? purchase.description : 'Compra',
+                          purchaseId: purchase ? purchase.id : '',
+                          purchaseDesc,
                           cardId: card.id,
                           cardName: card.name,
                           cardColor: card.color,
@@ -2239,11 +2423,13 @@ export default function App() {
                           amount: assigned.amount,
                           status: assigned.status,
                           instFriendId: assigned.id,
-                          dueDate: inst.due_date
+                          dueDate: inst.due_date,
+                          isRecurrent
                         };
                       }
                     }).filter(Boolean) as Array<{
                       instId: string;
+                      purchaseId: string;
                       purchaseDesc: string;
                       cardId: string;
                       cardName: string;
@@ -2254,6 +2440,7 @@ export default function App() {
                       status: 'pending' | 'paid';
                       instFriendId: string;
                       dueDate: string;
+                      isRecurrent: boolean;
                     }>;
                     
                     if (items.length === 0) return null;
@@ -2280,6 +2467,7 @@ export default function App() {
                     cycle: { month: number; year: number };
                     items: Array<{
                       instId: string;
+                      purchaseId: string;
                       purchaseDesc: string;
                       cardId: string;
                       cardName: string;
@@ -2290,6 +2478,7 @@ export default function App() {
                       status: 'pending' | 'paid';
                       instFriendId: string;
                       dueDate: string;
+                      isRecurrent: boolean;
                     }>;
                   }>;
 
@@ -2377,12 +2566,23 @@ export default function App() {
                                       <div key={item.instId} className="flex justify-between items-center text-xs">
                                         <div>
                                           <span className="text-slate-300 font-medium block">{item.purchaseDesc}</span>
-                                          <span className="text-[9px] text-textMuted">Parcela {item.installmentNumber}/{item.totalInstallments}</span>
+                                          <span className="text-[9px] text-textMuted">
+                                            {item.isRecurrent ? 'Recorrente' : `Parcela ${item.installmentNumber}/${item.totalInstallments}`}
+                                          </span>
                                         </div>
                                         <div className="flex items-center gap-3">
                                           <span className="font-bold text-white">
                                             R$ {item.amount.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                                           </span>
+                                          {item.isRecurrent && hasFutureInstallments(item.purchaseId) && (
+                                            <button
+                                              onClick={() => handleDeactivateRecurrence(item.purchaseId)}
+                                              className="p-1 text-amber-500 hover:text-amber-400 hover:bg-amber-500/10 rounded transition-all"
+                                              title="Desativar Recorrência"
+                                            >
+                                              <AlertCircle className="w-3.5 h-3.5" />
+                                            </button>
+                                          )}
                                           <button
                                             onClick={() => {
                                               if (person.isOwner) {
@@ -2478,19 +2678,41 @@ export default function App() {
                     </div>
                   </div>
 
+                  <div className="flex items-center gap-2 py-1">
+                    <input
+                      type="checkbox"
+                      id="purchaseIsRecurrent"
+                      checked={purchaseIsRecurrent}
+                      onChange={(e) => setPurchaseIsRecurrent(e.target.checked)}
+                      className="w-4 h-4 text-accent border-border rounded focus:ring-accent bg-background"
+                    />
+                    <label htmlFor="purchaseIsRecurrent" className="text-xs text-slate-200 cursor-pointer select-none font-medium">
+                      Compra Recorrente (Mensalidade / Assinatura)
+                    </label>
+                  </div>
+
                   <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-[11px] text-textMuted font-medium mb-1">Número de Parcelas</label>
-                      <select
-                        value={purchaseInstallments}
-                        onChange={(e) => setPurchaseInstallments(e.target.value)}
-                        className="w-full bg-background border border-border focus:border-accent/40 rounded-xl px-3 py-2 text-xs text-white focus:outline-none transition-all"
-                      >
-                        {Array.from({ length: 24 }, (_, i) => i + 1).map(n => (
-                          <option key={n} value={n}>{n}x</option>
-                        ))}
-                      </select>
-                    </div>
+                    {!purchaseIsRecurrent ? (
+                      <div>
+                        <label className="block text-[11px] text-textMuted font-medium mb-1">Número de Parcelas</label>
+                        <select
+                          value={purchaseInstallments}
+                          onChange={(e) => setPurchaseInstallments(e.target.value)}
+                          className="w-full bg-background border border-border focus:border-accent/40 rounded-xl px-3 py-2 text-xs text-white focus:outline-none transition-all"
+                        >
+                          {Array.from({ length: 24 }, (_, i) => i + 1).map(n => (
+                            <option key={n} value={n}>{n}x</option>
+                          ))}
+                        </select>
+                      </div>
+                    ) : (
+                      <div>
+                        <label className="block text-[11px] text-textMuted font-medium mb-1">Número de Parcelas</label>
+                        <div className="w-full bg-zinc-900 border border-border rounded-xl px-3 py-2 text-xs text-accent font-semibold flex items-center h-[34px]">
+                          Recorrente (60x)
+                        </div>
+                      </div>
+                    )}
                     <div>
                       <label className="block text-[11px] text-textMuted font-medium mb-1">Categoria</label>
                       <select
@@ -2588,7 +2810,11 @@ export default function App() {
                       <span className="font-semibold text-white block">Resumo do Rateio</span>
                       <div className="flex justify-between text-textMuted text-[11px]">
                         <span>Parcela Estimada:</span>
-                        <span>{purchaseInstallments}x de R$ {(parseFloat(purchaseAmount) / parseInt(purchaseInstallments)).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                        <span>
+                          {purchaseIsRecurrent 
+                            ? `Recorrente: R$ ${parseFloat(purchaseAmount).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}/mês (Simulado em 60x)` 
+                            : `${purchaseInstallments}x de R$ ${(parseFloat(purchaseAmount) / parseInt(purchaseInstallments)).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`}
+                        </span>
                       </div>
                       {selectedFriendsForDivision.length > 0 && (
                         <div className="flex justify-between text-accent font-semibold text-[11px]">
@@ -2636,9 +2862,20 @@ export default function App() {
                               R$ {p.total_amount.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                             </span>
                             <span className="text-[9px] text-textMuted font-semibold">
-                              {p.installments_count}x de R$ {(p.total_amount / p.installments_count).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                              {p.isRecurrent 
+                                ? 'Recorrente' 
+                                : `${p.installments_count}x de R$ ${(p.total_amount / p.installments_count).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`}
                             </span>
                           </div>
+                          {p.isRecurrent && hasFutureInstallments(p.id) && (
+                            <button
+                              onClick={() => handleDeactivateRecurrence(p.id)}
+                              className="p-1.5 text-amber-500 hover:text-amber-400 hover:bg-amber-500/10 rounded-lg transition-all"
+                              title="Desativar Recorrência"
+                            >
+                              <AlertCircle className="w-4 h-4" />
+                            </button>
+                          )}
                           <button
                             onClick={() => handleDeletePurchase(p.id)}
                             className="p-1.5 text-textMuted hover:text-danger hover:bg-danger/10 rounded-lg transition-all"
@@ -2665,28 +2902,43 @@ export default function App() {
                 </div>
               </div>
 
-              {/* SELETOR DE MÊS / ANO */}
-              <div className="bg-card border border-border p-4 rounded-xl flex items-center justify-between gap-4">
-                <span className="text-xs font-bold text-white">Filtro de Referência:</span>
-                <div className="flex items-center gap-2">
+              {/* SELETOR DE CARTÃO E MÊS / ANO */}
+              <div className="bg-card border border-border p-4 rounded-xl space-y-3">
+                <div className="flex items-center justify-between gap-4">
+                  <span className="text-xs font-bold text-white">Cartão:</span>
                   <select
-                    value={selectedMonth}
-                    onChange={(e) => setSelectedMonth(parseInt(e.target.value))}
-                    className="bg-background border border-border rounded-lg px-2.5 py-1 text-xs text-white focus:outline-none focus:border-accent"
+                    value={selectedReportCardId}
+                    onChange={(e) => setSelectedReportCardId(e.target.value)}
+                    className="bg-background border border-border rounded-lg px-2.5 py-1 text-xs text-white focus:outline-none focus:border-accent w-[200px]"
                   >
-                    {['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'].map((m, idx) => (
-                      <option key={m} value={idx + 1}>{m}</option>
+                    <option value="all">Todos os Cartões</option>
+                    {cards.map(c => (
+                      <option key={c.id} value={c.id}>{c.name}</option>
                     ))}
                   </select>
-                  <select
-                    value={selectedYear}
-                    onChange={(e) => setSelectedYear(parseInt(e.target.value))}
-                    className="bg-background border border-border rounded-lg px-2.5 py-1 text-xs text-white focus:outline-none focus:border-accent"
-                  >
-                    {[2025, 2026, 2027, 2028].map(y => (
-                      <option key={y} value={y}>{y}</option>
-                    ))}
-                  </select>
+                </div>
+                <div className="flex items-center justify-between gap-4">
+                  <span className="text-xs font-bold text-white">Filtro de Referência:</span>
+                  <div className="flex items-center gap-2">
+                    <select
+                      value={selectedMonth}
+                      onChange={(e) => setSelectedMonth(parseInt(e.target.value))}
+                      className="bg-background border border-border rounded-lg px-2.5 py-1 text-xs text-white focus:outline-none focus:border-accent"
+                    >
+                      {['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'].map((m, idx) => (
+                        <option key={m} value={idx + 1}>{m}</option>
+                      ))}
+                    </select>
+                    <select
+                      value={selectedYear}
+                      onChange={(e) => setSelectedYear(parseInt(e.target.value))}
+                      className="bg-background border border-border rounded-lg px-2.5 py-1 text-xs text-white focus:outline-none focus:border-accent"
+                    >
+                      {[2025, 2026, 2027, 2028].map(y => (
+                        <option key={y} value={y}>{y}</option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
               </div>
 
@@ -2714,6 +2966,49 @@ export default function App() {
                     </span>
                   </div>
                 </div>
+
+                {selectedReportCardId !== 'all' && estimatedReportCardLimit !== null && (
+                  <div className="bg-card/40 border border-border/60 rounded-xl p-3 flex justify-between items-center text-xs">
+                    <span className="text-textMuted font-medium">Limite Disponível Estimado (deste mês em diante):</span>
+                    <span className="font-bold text-emerald-400">
+                      R$ {estimatedReportCardLimit.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              {/* RATEIO CONSOLIDADO POR PESSOA */}
+              <div className="bg-card border border-border p-4.5 rounded-2xl space-y-3">
+                <h3 className="text-xs font-bold text-white uppercase tracking-wider">Rateio Consolidado (Você e Amigos)</h3>
+                {reportsPersonShares.length === 0 ? (
+                  <p className="text-xs text-textMuted text-center py-4">Nenhum rateio consolidado para este período.</p>
+                ) : (
+                  <div className="space-y-2.5">
+                    {reportsPersonShares.map(share => {
+                      const percentage = totalFaturasMese > 0 ? (share.amount / totalFaturasMese) * 100 : 0;
+                      return (
+                        <div key={share.name} className="space-y-1">
+                          <div className="flex justify-between items-center text-xs">
+                            <span className={`font-semibold ${share.isOwner ? 'text-emerald-400' : 'text-slate-200'}`}>
+                              {share.name} {share.isOwner && '(Você)'}
+                            </span>
+                            <span className="text-white font-bold">
+                              R$ {share.amount.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                            </span>
+                          </div>
+                          <div className="w-full bg-zinc-900 h-1.5 rounded-full overflow-hidden">
+                            <div
+                              className={`h-full rounded-full transition-all duration-500 ${
+                                share.isOwner ? 'bg-emerald-500' : 'bg-accent'
+                              }`}
+                              style={{ width: `${percentage}%` }}
+                            ></div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
 
               {/* DETALHAMENTO DE RATEIO POR AMIGO E PARCELA */}
@@ -2737,14 +3032,25 @@ export default function App() {
                               <span className="text-xs font-bold text-white block">{inst.purchaseDesc}</span>
                               <span className="text-[10px] text-textMuted flex items-center gap-1.5 mt-0.5">
                                 <span className={`w-1.5 h-1.5 rounded-full bg-gradient-to-r ${inst.cardColor}`}></span>
-                                {inst.cardName} • Parc. {inst.installment_number}/{inst.totalInstallments}
+                                {inst.cardName} • {inst.isRecurrent ? 'Recorrente' : `Parc. ${inst.installment_number}/${inst.totalInstallments}`}
                               </span>
                             </div>
-                            <div className="text-right">
-                              <span className="text-xs font-extrabold text-white block">
-                                R$ {inst.amount.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                              </span>
-                              <span className="text-[9px] text-textMuted">total da parcela</span>
+                            <div className="flex items-center gap-3">
+                              <div className="text-right">
+                                <span className="text-xs font-extrabold text-white block">
+                                  R$ {inst.amount.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                                </span>
+                                <span className="text-[9px] text-textMuted font-semibold">total da parcela</span>
+                              </div>
+                              {inst.isRecurrent && hasFutureInstallments(inst.purchase_id) && (
+                                <button
+                                  onClick={() => handleDeactivateRecurrence(inst.purchase_id)}
+                                  className="p-1.5 text-amber-500 hover:text-amber-400 hover:bg-amber-500/10 rounded-lg transition-all"
+                                  title="Desativar Recorrência"
+                                >
+                                  <AlertCircle className="w-4 h-4" />
+                                </button>
+                              )}
                             </div>
                           </div>
 
@@ -2815,18 +3121,29 @@ export default function App() {
                             </span>
                             <span className="text-[10px] text-textMuted flex items-center gap-1.5">
                               <span className={`w-1.5 h-1.5 rounded-full bg-gradient-to-r ${inst.cardColor}`}></span>
-                              {inst.cardName} • Parc. {inst.installment_number}/{inst.totalInstallments}
+                              {inst.cardName} • {inst.isRecurrent ? 'Recorrente' : `Parc. ${inst.installment_number}/${inst.totalInstallments}`}
                             </span>
                           </div>
                         </div>
-                        <div className="text-right">
-                          <span className={`text-xs font-bold block ${inst.status === 'paid' ? 'text-textMuted' : 'text-white'}`}>
-                            R$ {inst.amount.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                          </span>
-                          {inst.friendsAssigned.length > 0 && (
-                            <span className="text-[9px] text-accent font-medium">
-                              Sua fatia: R$ {inst.ownerShare.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                        <div className="text-right flex items-center gap-3">
+                          <div>
+                            <span className={`text-xs font-bold block ${inst.status === 'paid' ? 'text-textMuted' : 'text-white'}`}>
+                              R$ {inst.amount.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                             </span>
+                            {inst.friendsAssigned.length > 0 && (
+                              <span className="text-[9px] text-accent font-medium block">
+                                Sua fatia: R$ {inst.ownerShare.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                              </span>
+                            )}
+                          </div>
+                          {inst.isRecurrent && hasFutureInstallments(inst.purchase_id) && (
+                            <button
+                              onClick={() => handleDeactivateRecurrence(inst.purchase_id)}
+                              className="p-1.5 text-amber-500 hover:text-amber-400 hover:bg-amber-500/10 rounded-lg transition-all"
+                              title="Desativar Recorrência"
+                            >
+                              <AlertCircle className="w-4 h-4" />
+                            </button>
                           )}
                         </div>
                       </div>

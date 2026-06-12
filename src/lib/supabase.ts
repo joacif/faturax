@@ -49,6 +49,7 @@ export interface Purchase {
   purchase_date: string;
   category: string;
   friend_ids?: string[]; // IDs de amigos vinculados a esta compra
+  is_recurrent?: boolean;
 }
 
 export interface Installment {
